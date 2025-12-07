@@ -1,0 +1,309 @@
+import asyncio
+import json
+from uuid import uuid4
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp import ClientSession
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_core.messages import HumanMessage
+from langchain_openai import AzureChatOpenAI
+import os
+from dotenv import load_dotenv
+from contextlib import AsyncExitStack
+from shared.utils.prompt_registry import (
+    GATHER_INFO_PROMPT,
+    REQUIREMENT_GATHERING_INSTRUCTION,
+    INFORMATION_EXTRACTION_INSTRUCTION,
+    INFER_USER_INTENT,
+    SEARCH_HOTELS_INSTRUCTION
+)
+
+load_dotenv()
+from langchain_core.globals import set_debug
+
+# set_debug(True)
+from langgraph.checkpoint.memory import InMemorySaver
+from datetime import datetime
+from typing import Dict, Literal, TypedDict, Union
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.types import interrupt, Command
+from langchain.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from schema.booking_details import TravelBooking
+from schema.intent import UserIntent
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    MessagesPlaceholder,
+    HumanMessagePromptTemplate,
+)
+from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_tool_call
+from langchain.messages import ToolMessage
+
+
+
+class ElicitationState(MessagesState):
+    requirements_gathered: Dict = {}
+    user_query: str = ""
+
+
+
+async def handle_failure(*args, error=None, **kwargs):
+    request, _ = args
+    toolmsg = ToolMessage(
+            content=
+            f"No data found. {str(error)}"
+            "Please stop processing this request.",
+            tool_call_id=request.tool_call["id"]
+        )
+
+    return Command(update={'messages': [toolmsg]}, goto=END)
+
+@wrap_tool_call
+# @retry(max_retries=1, delay=2, on_failure=handle_failure)
+async def handle_tool_errors(request, handler):
+    try:
+        return await handler(request)
+    except Exception as e:
+        toolmsg = ToolMessage(
+                content=
+                f"No data found. {str(e)}"
+                "Please stop processing this request.",
+                tool_call_id=request.tool_call["id"]
+            )
+
+        return Command(update={'messages': [toolmsg]}, goto=END)
+
+
+class TravelMCPClient(StateGraph):
+    def __init__(self):
+        super().__init__(ElicitationState)
+        self.llm = AzureChatOpenAI(
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+            azure_deployment=os.getenv("AZURE_DEPLOYMENT_ANME")
+        )
+        self.exit_stack = AsyncExitStack()
+
+    async def connect_to_stdio_server(self, cmd: str, args: list):
+        # Define the server params
+        server_params = StdioServerParameters(command=cmd, args=args)
+        # Create a transport context for STDIO
+        transport_context = stdio_client(server_params)
+
+        # Get read and write stream from transport context
+        read, write = await self.exit_stack.enter_async_context(transport_context)
+
+        # Create client session with transport context
+        session_ctx = ClientSession(read, write)
+
+        # Get client session
+        client_session = await self.exit_stack.enter_async_context(session_ctx)
+
+        # Initialize session
+        await client_session.initialize()
+        # Load the tools on this server
+        tools = await load_mcp_tools(client_session)
+        return tools
+
+    async def connect_to_server(self, server_url):
+        # create client transport context for HTTP
+        self.client_transport = streamablehttp_client(server_url)
+
+        # Get the read and write streams for creating client session context
+        read, write, _ = await self.exit_stack.enter_async_context(
+            self.client_transport
+        )
+
+        # Create client session context
+        session_ctx = ClientSession(read, write)
+        client_Session = await self.exit_stack.enter_async_context(session_ctx)
+        await client_Session.initialize()
+        # Pass the session to langchain to load the tools from
+        tools = await load_mcp_tools(session=client_Session)
+        return tools
+
+    async def supervisor(self, state: MessagesState) -> Command[Literal['elicitation', 'general']]:
+        chat = ChatPromptTemplate(
+            [
+                SystemMessagePromptTemplate.from_template(
+                    INFER_USER_INTENT
+                ),
+                MessagesPlaceholder(variable_name="chat_history")
+            ]
+        )
+
+        chain = chat | self.llm
+        last_message = state['messages'][-1]
+
+        assert isinstance(last_message, HumanMessage)
+        intent_categories = ''
+        for idx, i in enumerate(UserIntent, 1):
+            intent_categories += f"{idx}. {i.value} : {i.description}\n"
+
+        response = await chain.ainvoke(
+            {
+                "chat_history": [last_message],
+                "intent_categories": intent_categories
+            }
+        )
+        if response.content == UserIntent.STAY_SEARCH.value:
+            return Command(goto="elicitation", update={})
+        return Command(goto="general", update={})
+    
+    async def general(self, state: MessagesState) -> Command[Literal[END]]:
+        agent = create_agent(model=self.llm)
+        last_message = state['messages'][-1]
+        response = agent.ainvoke({'messages': [last_message]})
+        return Command(goto=END, update={'messages': response['messages']})
+    
+    async def gather_requirements(self, state: ElicitationState):
+        chat = ChatPromptTemplate(
+            [
+                SystemMessage(
+                    REQUIREMENT_GATHERING_INSTRUCTION
+                ),
+                HumanMessagePromptTemplate.from_template(GATHER_INFO_PROMPT)
+            ]
+        )
+
+        chain = chat | self.llm
+
+        response = await chain.ainvoke(
+            {
+                "gathered_info": state["requirements_gathered"],
+            }
+        )
+        user_input = interrupt(response)
+
+        return {'messages': [response, HumanMessage(user_input)]}
+
+    async def validate_requirements(
+        self, state: ElicitationState
+    ) -> Command[Literal["gather_requirements", END]]:
+        prev_gathered_req = state.get('requirements_gathered', {})
+        chat = ChatPromptTemplate(
+            [
+                SystemMessagePromptTemplate.from_template(
+                    INFORMATION_EXTRACTION_INSTRUCTION
+                ),
+                MessagesPlaceholder(variable_name="chat_history"),
+            ]
+        )
+        struct = {}
+        for field, field_info in TravelBooking.model_fields.items():
+            struct[field] = field_info.description
+        struct = json.dumps(struct)
+
+        chain = chat | self.llm | JsonOutputParser()
+
+        response = await chain.ainvoke(
+            {
+                "chat_history": state["messages"],
+                "now": datetime.now(),
+                "structure": struct,
+            }
+        )
+        validation_result = TravelBooking.partial_validate(response)
+        if validation_result.errors:
+            return Command(
+                update={
+                    'messages': [AIMessage(json.dumps(response))],
+                    "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data},
+                },
+                goto="gather_requirements",
+            )
+        return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="check_stays", graph=Command.PARENT)
+    
+    async def _check_for_stays(self, state: ElicitationState):
+        last_message = state['messages'][-1]
+        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=SEARCH_HOTELS_INSTRUCTION,  middleware=[handle_tool_errors])
+        try:
+            response = await agent.ainvoke({'messages':[last_message]})
+        except Exception as e:
+            print(e)
+        return response
+
+    def _create_elicitation_subgraph(self):
+        eli_subgraph = StateGraph(ElicitationState)
+
+        self._create_elicitation_nodes(eli_subgraph)
+        self._connect_elicitation_nodes(eli_subgraph)
+        return eli_subgraph.compile()
+
+    def _create_elicitation_nodes(self, graph: StateGraph):
+        graph.add_node("validate_requirements", self.validate_requirements)
+        graph.add_node("gather_requirements", self.gather_requirements)
+
+    def _connect_elicitation_nodes(self, graph: StateGraph):
+        graph.add_edge(START, "validate_requirements")
+        graph.add_edge("gather_requirements", "validate_requirements")
+
+    def create_nodes(self):
+        self.add_node("supervisor", self.supervisor)
+        self.add_node("general",self.general)
+        self.add_node("check_stays", self._check_for_stays)
+
+        eli_subgraph = self._create_elicitation_subgraph()
+        self.add_node("elicitation", eli_subgraph)
+
+    def connect_nodes(self):
+        self.add_edge(START, "supervisor")
+        self.add_edge("check_stays", END)
+
+    async def connect_to_mcp_servers(self):
+        toolkit = []
+        tools = await self.connect_to_server("http://localhost:8000/mcp")
+        toolkit.extend(tools)
+
+        tools = await self.connect_to_stdio_server(
+            cmd="npx", args=["-y", "@openbnb/mcp-server-airbnb", "--ignore-robots-txt"]
+        )
+        toolkit.extend(tools)
+
+        self.toolkit = toolkit
+
+    async def cleanup(self):
+        await self.exit_stack.aclose()
+
+
+async def main():
+    try:
+        travel_workflow = TravelMCPClient()
+        await travel_workflow.connect_to_mcp_servers()
+        travel_workflow.create_nodes()
+        travel_workflow.connect_nodes()
+
+        # Generate thread_id for tracking state across interrupts (HITL)
+        thread_id = uuid4()
+        config = {'configurable': {'thread_id': thread_id}}
+        graph = travel_workflow.compile(checkpointer=InMemorySaver())
+
+        while True:
+            query = input("Hello. What is your query? ")
+            fresh_exec = True
+            while True:
+                if fresh_exec:
+                    fresh_exec = False
+                    response = await graph.ainvoke(
+                        {"messages": [HumanMessage(query)]},
+                        config=config
+                    )
+                else:
+                    response = await graph.ainvoke(
+                        Command(resume=query),
+                        config=config
+                    )
+                if not response.get('__interrupt__'):
+                    break
+                print(response['__interrupt__'][0].value.content)
+                query = input("Enter your response: ")
+            
+            last_message = response['messages'][-1]
+            print(last_message.content)
+    except Exception as e:
+        print(e)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

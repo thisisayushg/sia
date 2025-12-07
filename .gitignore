@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Jupyter Notebook files
+.ipynb_checkpoints
+*.ipynb
+
+# Logs
+*.log
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# Other
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# LangChain and Chainlit
+.chainlit/
+.files/
