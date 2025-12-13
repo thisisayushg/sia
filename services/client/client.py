@@ -108,11 +108,11 @@ class TravelMCPClient(StateGraph):
 
     async def connect_to_server(self, server_url):
         # create client transport context for HTTP
-        self.client_transport = streamablehttp_client(server_url)
+        client_transport = streamablehttp_client(server_url)
 
         # Get the read and write streams for creating client session context
         read, write, _ = await self.exit_stack.enter_async_context(
-            self.client_transport
+            client_transport
         )
 
         # Create client session context
