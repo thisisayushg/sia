@@ -29,8 +29,8 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from schema.booking_details import TravelBooking
-from schema.intent import UserIntent
+from .schema.booking_details import TravelBooking
+from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
