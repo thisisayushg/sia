@@ -1,3 +1,9 @@
+import sys
+import pathlib
+
+project_dir = pathlib.Path(__file__).parents[2]
+sys.path.append(project_dir)
+
 import asyncio
 import json
 from uuid import uuid4
@@ -152,9 +158,9 @@ class TravelMCPClient(StateGraph):
         return Command(goto="general", update={})
     
     async def general(self, state: MessagesState) -> Command[Literal[END]]:
-        agent = create_agent(model=self.llm)
+        agent = create_agent(model=self.llm, tools=self.general_toolkit)
         last_message = state['messages'][-1]
-        response = agent.ainvoke({'messages': [last_message]})
+        response = await agent.ainvoke({'messages': [last_message]})
         return Command(goto=END, update={'messages': response['messages']})
     
     async def gather_requirements(self, state: ElicitationState):
@@ -217,7 +223,7 @@ class TravelMCPClient(StateGraph):
     
     async def _check_for_stays(self, state: ElicitationState):
         last_message = state['messages'][-1]
-        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=SEARCH_HOTELS_INSTRUCTION,  middleware=[handle_tool_errors])
+        agent = create_agent(model=self.llm, tools=self.booking_toolkit, system_prompt=SEARCH_HOTELS_INSTRUCTION,  middleware=[handle_tool_errors])
         try:
             response = await agent.ainvoke({'messages':[last_message]})
         except Exception as e:
@@ -252,16 +258,17 @@ class TravelMCPClient(StateGraph):
         self.add_edge("check_stays", END)
 
     async def connect_to_mcp_servers(self):
-        toolkit = []
+        self.general_toolkit, self.booking_toolkit = [], []
         tools = await self.connect_to_server("http://localhost:8000/mcp")
-        toolkit.extend(tools)
+        self.booking_toolkit.extend(tools)
+        tools = await self.connect_to_server("http://localhost:3400/mcp")
+        self.general_toolkit.extend(tools)
 
         tools = await self.connect_to_stdio_server(
             cmd="npx", args=["-y", "@openbnb/mcp-server-airbnb", "--ignore-robots-txt"]
         )
-        toolkit.extend(tools)
+        self.booking_toolkit.extend(tools)
 
-        self.toolkit = toolkit
 
     async def cleanup(self):
         await self.exit_stack.aclose()
