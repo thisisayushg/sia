@@ -92,42 +92,77 @@ class TravelMCPClient(StateGraph):
         self.exit_stack = AsyncExitStack()
 
     async def connect_to_stdio_server(self, cmd: str, args: list):
-        # Define the server params
-        server_params = StdioServerParameters(command=cmd, args=args)
-        # Create a transport context for STDIO
-        transport_context = stdio_client(server_params)
+        # Local stack for error isolation
+        local_stack = AsyncExitStack()
 
-        # Get read and write stream from transport context
-        read, write = await self.exit_stack.enter_async_context(transport_context)
+        try:
+            # Define the server params
+            server_params = StdioServerParameters(command=cmd, args=args)
+            # Create a transport context for STDIO
+            transport_context = stdio_client(server_params)
 
-        # Create client session with transport context
-        session_ctx = ClientSession(read, write)
+            # Get read and write stream from transport context
+            read, write = await local_stack.enter_async_context(transport_context)
 
-        # Get client session
-        client_session = await self.exit_stack.enter_async_context(session_ctx)
+            # Create client session with transport context
+            session_ctx = ClientSession(read, write)
 
-        # Initialize session
-        await client_session.initialize()
-        # Load the tools on this server
-        tools = await load_mcp_tools(client_session)
-        return tools
+            # Get client session
+            client_session = await local_stack.enter_async_context(session_ctx)
+
+            # Initialize session
+            await client_session.initialize()
+            # Load the tools on this server
+            tools = await load_mcp_tools(client_session)
+            # SUCCESS: Transfer all cleanup callbacks to main exit_stack
+            # This prevents local_stack from closing the connections
+            self.exit_stack.push_async_exit(local_stack.pop_all())
+        
+            return tools
+        
+        except (asyncio.CancelledError, Exception) as e:
+            # FAILURE: Clean up local resources only
+            try:
+                await local_stack.aclose()
+            except Exception as cleanup_error:
+                print(f"Cleanup error for {cmd}: {cleanup_error}")
+            print(f"Server {cmd} failed: {e}")
+            return []
 
     async def connect_to_server(self, server_url):
-        # create client transport context for HTTP
-        client_transport = streamablehttp_client(server_url)
+        # Local stack for error isolation
+        local_stack = AsyncExitStack()
 
-        # Get the read and write streams for creating client session context
-        read, write, _ = await self.exit_stack.enter_async_context(
-            client_transport
-        )
+        try:
+            # create client transport context for HTTP
+            client_transport = streamablehttp_client(server_url)
 
-        # Create client session context
-        session_ctx = ClientSession(read, write)
-        client_Session = await self.exit_stack.enter_async_context(session_ctx)
-        await client_Session.initialize()
-        # Pass the session to langchain to load the tools from
-        tools = await load_mcp_tools(session=client_Session)
-        return tools
+            # Get the read and write streams for creating client session context
+            read, write, _ = await local_stack.enter_async_context(
+                client_transport
+            )
+
+            # Create client session context
+            session_ctx = ClientSession(read, write)
+            client_Session = await local_stack.enter_async_context(session_ctx)
+            
+            await client_Session.initialize()
+            # Pass the session to langchain to load the tools from
+            tools = await load_mcp_tools(session=client_Session)
+
+            # SUCCESS: Transfer all cleanup callbacks to main exit_stack
+            # This prevents local_stack from closing the connections
+            self.exit_stack.push_async_exit(local_stack.pop_all())
+
+            return tools
+        except (asyncio.CancelledError, Exception) as e:
+            # FAILURE: Clean up local resources only
+            try:
+                await local_stack.aclose()
+            except Exception as cleanup_error:
+                print(f"Cleanup error for {server_url}: {cleanup_error}")
+            print(f"Server {server_url} failed. Please ensure that the service is running.")
+            return []
 
     async def supervisor(self, state: MessagesState) -> Command[Literal['elicitation', 'general']]:
         chat = ChatPromptTemplate(
