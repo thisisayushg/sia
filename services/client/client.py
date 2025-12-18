@@ -370,6 +370,8 @@ async def main():
                             query = input(interrupt_payload.content + "\n")
                             interrupt_payload = None
                             break
+                else:
+                    break
 
     except Exception as e:
         print(e)
