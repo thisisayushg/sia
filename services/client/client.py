@@ -215,9 +215,13 @@ class TravelMCPClient(StateGraph):
                 "gathered_info": state["requirements_gathered"],
             }
         )
-        user_input = interrupt(response)
+        return {'messages': [response]}
 
-        return {'messages': [response, HumanMessage(user_input)]}
+    async def present_interrupt(self, state: ElicitationState):
+        last_message = state['messages'][-1]
+        user_input = interrupt(last_message)
+
+        return {'messages': [HumanMessage(user_input)]}
 
     async def validate_requirements(
         self, state: ElicitationState
@@ -275,10 +279,12 @@ class TravelMCPClient(StateGraph):
     def _create_elicitation_nodes(self, graph: StateGraph):
         graph.add_node("validate_requirements", self.validate_requirements)
         graph.add_node("gather_requirements", self.gather_requirements)
+        graph.add_node("present_interrupt", self.present_interrupt)
 
     def _connect_elicitation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "validate_requirements")
-        graph.add_edge("gather_requirements", "validate_requirements")
+        graph.add_edge("gather_requirements", "present_interrupt")
+        graph.add_edge("present_interrupt", "validate_requirements")
 
     def create_nodes(self):
         self.add_node("supervisor", self.supervisor)
@@ -321,28 +327,50 @@ async def main():
         config = {'configurable': {'thread_id': thread_id}}
         graph = travel_workflow.compile(checkpointer=InMemorySaver())
 
+        conversation_history = []
         while True:
-            query = input("Hello. What is your query? ")
+            query = input("Hello. What is your query? \n")
             fresh_exec = True
             while True:
                 if fresh_exec:
                     fresh_exec = False
-                    response = await graph.ainvoke(
-                        {"messages": [HumanMessage(query)]},
-                        config=config
-                    )
+                    graph_input = {"messages": [*conversation_history, HumanMessage(query)]}
                 else:
-                    response = await graph.ainvoke(
-                        Command(resume=query),
-                        config=config
-                    )
-                if not response.get('__interrupt__'):
-                    break
-                print(response['__interrupt__'][0].value.content)
-                query = input("Enter your response: ")
-            
-            last_message = response['messages'][-1]
-            print(last_message.content)
+                    graph_input = Command(resume=query)
+
+                response = ''
+                async for mode, chunk in graph.astream(
+                        graph_input,
+                        stream_mode=["messages", "updates"],
+                        config=config,
+                    ):
+                    if mode == "messages":
+                        message_chunk, metadata = chunk  # "messages" yields (message_chunk, metadata) [web:42]
+                        if getattr(message_chunk, "content", None):
+                            print(message_chunk.content, end="", flush=True)
+
+                    elif mode == "updates":
+                        # "updates" yields dicts like {"node_name": {...}} [web:42]
+                        # Interrupt info may appear in streamed state depending on version/config;
+                        # so we look for it defensively in the update payload.
+                        #
+                        # Common patterns people see are:
+                        # - {"__interrupt__": [...]}  (interrupts exposed in state)
+                        # - {"some_node": {"__interrupt__": [...]}}
+                        if "__interrupt__" in chunk:
+                            interrupt_payload = chunk["__interrupt__"][0].value
+                        else:
+                            # search nested
+                            for _, v in chunk.items():
+                                if isinstance(v, dict) and "__interrupt__" in v:
+                                    interrupt_payload = v["__interrupt__"][0].value
+
+                        if "interrupt_payload" in locals() and interrupt_payload is not None:
+                            # We can stop consuming the stream now; graph is paused and checkpointed.
+                            query = input(interrupt_payload.content + "\n")
+                            interrupt_payload = None
+                            break
+
     except Exception as e:
         print(e)
 
