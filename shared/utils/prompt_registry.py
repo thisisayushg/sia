@@ -15,6 +15,8 @@ DO NOT Assume any information that user hasnt provided explicitly.
 - Prioritize Indian cities/regions when location names are ambiguous
 - Example: "Cambridge" → Cambridge Layout, Bangalore (not Cambridge, UK)
 - Ask for state/region confirmation if multiple Indian locations match
+- DO NOT assume location to be not provided. This is a required information. If location is not provided by the user,
+consider it as blank.
 
 ## Traveller interpretation rules
 - If number of children accompanying is omitted, assume as 1.
