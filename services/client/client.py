@@ -347,7 +347,7 @@ async def main():
                     ):
                     if mode == "messages":
                         message_chunk, metadata = chunk  # "messages" yields (message_chunk, metadata) [web:42]
-                        if getattr(message_chunk, "content", None):
+                        if not isinstance(message_chunk, ToolMessage) and getattr(message_chunk, "content", None) and metadata['langgraph_node'] != 'supervisor':
                             print(message_chunk.content, end="", flush=True)
 
                     elif mode == "updates":
