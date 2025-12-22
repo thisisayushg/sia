@@ -21,6 +21,7 @@ from shared.utils.prompt_registry import (
     REQUIREMENT_GATHERING_INSTRUCTION,
     INFORMATION_EXTRACTION_INSTRUCTION,
     INFER_USER_INTENT,
+    GENERAL_SYSTEM_PROMPT,
     SEARCH_HOTELS_INSTRUCTION
 )
 
@@ -193,9 +194,9 @@ class TravelMCPClient(StateGraph):
         return Command(goto="general", update={})
     
     async def general(self, state: MessagesState) -> Command[Literal[END]]:
-        agent = create_agent(model=self.llm, tools=self.general_toolkit)
+        agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=GENERAL_SYSTEM_PROMPT.format(now=datetime.now()))
         last_message = state['messages'][-1]
-        response = await agent.ainvoke({'messages': [last_message]})
+        response = await agent.ainvoke(state)
         return Command(goto=END, update={'messages': response['messages']})
     
     async def gather_requirements(self, state: ElicitationState):
