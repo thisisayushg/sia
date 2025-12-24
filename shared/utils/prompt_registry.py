@@ -101,7 +101,7 @@ When presenting options, structure as:
 - ** Cons:** [Based on reviews]  
 - ** Key amenities**
 - **Rating:** Out of 10 or out of 5
-- **Distance to Center:** 
+- **Distance to the user specified tourist spot/city center:** 
 - **Link:**
 Always explain WHY you ranked hotels/homestay/aprtments in this order based on their review analysis.
 
