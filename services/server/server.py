@@ -214,7 +214,6 @@ def _search_available_hotels(data: SearchArgs) -> list[Hotel] | BookingError:
         "main_photo_id",
         "wishlist_count",
         "genius_discount_percentage",
-        "composite_price_breakdown",
     }
 
     # Remove the keys for each item in the response
@@ -236,7 +235,8 @@ def _search_available_hotels(data: SearchArgs) -> list[Hotel] | BookingError:
         _ = []
         for item in response:
             result = validate(item, Hotel.model_json_schema(mode="serialization"))
-            _.append(Hotel(**item))
+            if "composite_price_breakdown" in item:
+                _.append(Hotel(**item))
         return _
     except Exception as e:
         return BookingError(detail=e)
@@ -328,10 +328,13 @@ def _fetch_hotel_reviews(hotel_id: str) -> list[HotelReview]:
     response.raise_for_status()
     response = response.json()
     result = []
+    keys_to_remove = {"author", "pros_translated", "title_translated", "reviewer_photos", "cons_translated", "is_trivial"}
+    
     for item in response.get("result", []):
-        # Remove non-essential information
-        item.pop("author")
-        item.get("stayed_room_info", {}).pop("photo", "")
+        # Remove non-essential information and specified keys
+        for key in keys_to_remove:
+            item.pop(key, None)
+        item.get("stayed_room_info", {}).pop("photo", None)
 
         result.append(HotelReview(**item))
     return result
