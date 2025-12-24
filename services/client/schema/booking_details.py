@@ -10,4 +10,4 @@ class TravelBooking(PartialValidationMixin, BaseModel):
     budget_per_night: Annotated[float, Field(..., gt=0, description="Budget per night in INR")]
     location: Annotated[str, Field(..., description="Place or city or locality name for stay", min_length=1)]
     number_of_children: Annotated[int, Field(..., ge=1, description="Number of children")]
-    reasoning: Annotated[str, Field(..., description="All the reasoning behind each of the extracted value")]
+    reasoning: Annotated[str, Field(..., description="All the reasoning behind each of the extracted value. Also include current date in words in this reasoning")]
