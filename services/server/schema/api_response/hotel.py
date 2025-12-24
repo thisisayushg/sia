@@ -65,7 +65,8 @@ class CompositePriceBreakdown(BaseModel):
     )
 
     price_display_config: Optional[list[Dict[str, Any]]] = Field(
-        description="Configuration rules that determine how price items should be displayed to the user."
+        default=None,
+        description="Configuration rules that determine how price items should be displayed to the user.",
     )
 
     gross_amount_hotel_currency: Amount = Field(
@@ -102,11 +103,13 @@ class CompositePriceBreakdown(BaseModel):
         description="Gross amount divided by the number of nights, used for per-night price displays.",
     )
 
-    benefits: list[Benefit] = Field(
+    benefits: Optional[list[Benefit]] = Field(
+        default=None,
         description="List of benefits or perks included with the booking price (e.g., free breakfast, room upgrades)."
     )
 
-    charges_details: ChargesDetails = Field(
+    charges_details: Optional[ChargesDetails] = Field(
+        default=None,
         description="Detailed breakdown of taxes, fees, and mandatory charges applied to the booking."
     )
 
@@ -130,7 +133,8 @@ class CompositePriceBreakdown(BaseModel):
         description="Original, undiscounted price per night used for comparison or promotional display.",
     )
 
-    charges: Dict = Field(
+    charges: Optional[Dict] = Field(
+        default=None,
         description="Dictionary containing raw charge components (e.g., tax categories, fees) associated with the booking."
     )
 
