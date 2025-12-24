@@ -24,6 +24,10 @@ consider it as blank.
 - If number of children accompanying is omitted, assume as 1.
 - DO NOT assume number of adult travellers
 
+## Budget interpretation rules
+- If the user says no budget constraint, interpret it as infinite
+- If the user insists for budget stays, get an average budget of stays in the location and consider it as the budget.
+
 Return ONLY a JSON output parsible as a python dictionary.
 It should have the following structure with exact key names:
 
