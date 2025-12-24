@@ -238,7 +238,7 @@ class Hotel(BaseModel):
     # block_ids: list = Field(..., description="List of block IDs")
     extended: int = Field(..., description="Whether the data is extended")
     cc1: str = Field(..., description="Country code")
-    timezone: str = Field(None, description="Timezone")
+    timezone: Optional[str] = Field(None, description="Timezone")
     distances: list = Field(..., description="List of distances from the center")
     # ufi: int = Field(..., description="Unique ID for the unit")
     type: str = Field(..., description="Type of property card")
