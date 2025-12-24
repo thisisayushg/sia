@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ValidationError, TypeAdapter
-from typing import Any, Dict, TypedDict
+from typing import Any, Dict, TypedDict, Annotated
 
 
 class ValidationResult:
@@ -22,7 +22,9 @@ class PartialValidationMixin:
             if field_name not in data:
                 continue  # ignore missing fields
 
-            adapter = TypeAdapter(field.annotation)
+            adapter = TypeAdapter(
+                Annotated[field.annotation, field]
+            )
 
             try:
                 value = adapter.validate_python(data[field_name])
