@@ -117,7 +117,7 @@ class SearchArgs(BaseModel):
     num_rooms: int = Field(1, ge=1, description="Number of rooms preferred in total")
     num_adults: int = Field(1, description="Number of adult occupants")
     max_results: int = Field(
-        5, description="The maximum number of stays to find in one go"
+        10, description="The maximum number of stays to find in one go"
     )
     # order_by:    #     SortingMethods,
     #     Field(
