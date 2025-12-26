@@ -311,6 +311,10 @@ class TravelMCPClient(StateGraph):
         )
         self.booking_toolkit.extend(tools)
 
+        tools = await self.connect_to_stdio_server(
+            cmd="npx", args=["-y", "mcp-remote", "https://mcp.tavily.com/mcp/?tavilyApiKey={TAVILY_KEY}"]
+        )
+        self.general_toolkit.extend(tools)
 
     async def cleanup(self):
         await self.exit_stack.aclose()
@@ -330,7 +334,7 @@ async def main():
 
         conversation_history = []
         while True:
-            query = input("Hello. What is your query? \n")
+            query = input("\nHello. What is your query? \n")
             fresh_exec = True
             while True:
                 if fresh_exec:
