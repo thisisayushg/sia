@@ -1,12 +1,32 @@
 name: mcp-tools-server
 services:
-  tavily-mcp:
+  tavily-search-mcp:
     build:
-      context: ./tavily-mcp/
+      context: https://github.com/thisisayushg/tavily-mcp-http.git
       dockerfile: Dockerfile
     image: tavily-search-mcp
-    container_name: tavily-mcp
+    container_name: tavily-search-mcp
     ports:
       - "2400:3000"  # Adjust the ports as necessary based on your app's requirements
     environment:
       - TAVILY_API_KEY=your-tavily-api-key  # Set any necessary environment variables here
+
+  openweather-mcp:
+    build:
+      context: https://github.com/thisisayushg/openweather-mcp.git
+      dockerfile: Dockerfile
+    image: openweather-mcp
+    container_name: openweather-mcp
+    ports:
+      - "3400:8000"
+    environment:
+      - OPENWEATHER_API_KEY=your-openweather-api-key
+    
+  openstreetmap-mcp:
+    build:
+      context: https://github.com/thisisayushg/open-streetmap-mcp.git
+      dockerfile: Dockerfile
+    image: openstreetmap-mcp
+    container_name: openstreetmap-mcp
+    ports:
+      - "4400:8000"
