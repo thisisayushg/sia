@@ -303,18 +303,22 @@ class TravelMCPClient(StateGraph):
         self.general_toolkit, self.booking_toolkit = [], []
         tools = await self.connect_to_server("http://localhost:8000/mcp")
         self.booking_toolkit.extend(tools)
+        
+        # Tavily Search MCP Server
+        tools = await self.connect_to_server("http://localhost:2400/mcp")
+        self.general_toolkit.extend(tools)
+
+        # OpenWeather MCP Server
         tools = await self.connect_to_server("http://localhost:3400/mcp")
         self.general_toolkit.extend(tools)
 
-        tools = await self.connect_to_stdio_server(
-            cmd="npx", args=["-y", "@openbnb/mcp-server-airbnb", "--ignore-robots-txt"]
-        )
-        self.booking_toolkit.extend(tools)
-
-        tools = await self.connect_to_stdio_server(
-            cmd="npx", args=["-y", "mcp-remote", "https://mcp.tavily.com/mcp/?tavilyApiKey={TAVILY_KEY}"]
-        )
+        # OpenStreet Map MCP Server
+        tools = await self.connect_to_server("http://localhost:4400/mcp")
         self.general_toolkit.extend(tools)
+
+        # OpenBNB MCP Server
+        tools = await self.connect_to_server("http://localhost:5400/mcp")
+        self.booking_toolkit.extend(tools)
 
     async def cleanup(self):
         await self.exit_stack.aclose()
