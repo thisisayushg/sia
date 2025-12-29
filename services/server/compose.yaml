@@ -30,3 +30,12 @@ services:
     container_name: openstreetmap-mcp
     ports:
       - "4400:8000"
+
+  openbnb-mcp:
+    build:
+      context: https://github.com/thisisayushg/airbnb-mcp-server.git
+      dockerfile: Dockerfile
+    image: openbnb-mcp
+    container_name: openbnb-mcp
+    ports:
+      - "5400:3000"
