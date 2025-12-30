@@ -16,13 +16,19 @@ from langchain_openai import AzureChatOpenAI
 import os
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
-from shared.utils.prompt_registry import (
+from shared.prompt_registry.stay_search import (
     GATHER_INFO_PROMPT,
     REQUIREMENT_GATHERING_INSTRUCTION,
+    SEARCH_HOTELS_INSTRUCTION,
+    TRAVELLER_INTERPRETATION_INSTRUCTION
+)
+from shared.prompt_registry.common import (
     INFORMATION_EXTRACTION_INSTRUCTION,
+)
+from shared.prompt_registry.general import (
     INFER_USER_INTENT,
     GENERAL_SYSTEM_PROMPT,
-    SEARCH_HOTELS_INSTRUCTION
+    JSON_RETURN_INSTRUCTION,
 )
 
 load_dotenv()
@@ -231,7 +237,7 @@ class TravelMCPClient(StateGraph):
         chat = ChatPromptTemplate(
             [
                 SystemMessagePromptTemplate.from_template(
-                    INFORMATION_EXTRACTION_INSTRUCTION
+                    INFORMATION_EXTRACTION_INSTRUCTION + TRAVELLER_INTERPRETATION_INSTRUCTION + JSON_RETURN_INSTRUCTION
                 ),
                 MessagesPlaceholder(variable_name="chat_history"),
             ]
