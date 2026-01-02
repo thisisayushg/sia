@@ -13,6 +13,7 @@ from mcp import ClientSession
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
+from shared.utils.helpers import generate_field_description
 import os
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
@@ -34,7 +35,7 @@ from shared.prompt_registry.general import (
 load_dotenv()
 from langchain_core.globals import set_debug
 
-# set_debug(True)
+set_debug(True)
 from langgraph.checkpoint.memory import InMemorySaver
 from datetime import datetime
 from typing import Dict, Literal, TypedDict, Union
@@ -42,7 +43,7 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from .schema.booking_details import TravelBooking
+from .schema.booking_details import DestinationRecommendation, TravelBooking
 from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -58,7 +59,7 @@ from langchain.messages import ToolMessage
 
 class ElicitationState(MessagesState):
     requirements_gathered: Dict = {}
-    user_query: str = ""
+    intent: UserIntent = None
 
 
 
@@ -195,9 +196,9 @@ class TravelMCPClient(StateGraph):
                 "intent_categories": intent_categories
             }
         )
-        if response.content == UserIntent.STAY_SEARCH.value:
-            return Command(goto="elicitation", update={})
-        return Command(goto="general", update={})
+        if response.content == UserIntent.OTHER.value:
+            return Command(goto="general", update={})
+        return Command(goto="elicitation", update={'intent': UserIntent(response.content)})
     
     async def general(self, state: MessagesState) -> Command[Literal[END]]:
         agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=GENERAL_SYSTEM_PROMPT.format(now=datetime.now()))
@@ -206,9 +207,15 @@ class TravelMCPClient(StateGraph):
         return Command(goto=END, update={'messages': response['messages']})
     
     async def gather_requirements(self, state: ElicitationState):
+        if state['intent'] == UserIntent.STAY_SEARCH:
+            response_model = TravelBooking
+        elif state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
+            response_model = DestinationRecommendation
+
+        req_opt_info = generate_field_description(response_model)
         chat = ChatPromptTemplate(
             [
-                SystemMessage(
+                SystemMessagePromptTemplate.from_template(
                     REQUIREMENT_GATHERING_INSTRUCTION
                 ),
                 HumanMessagePromptTemplate.from_template(GATHER_INFO_PROMPT)
@@ -220,6 +227,7 @@ class TravelMCPClient(StateGraph):
         response = await chain.ainvoke(
             {
                 "gathered_info": state["requirements_gathered"],
+                "information_description": req_opt_info
             }
         )
         return {'messages': [response]}
@@ -243,7 +251,11 @@ class TravelMCPClient(StateGraph):
             ]
         )
         struct = {}
-        for field, field_info in TravelBooking.model_fields.items():
+        if state['intent'] == UserIntent.STAY_SEARCH:
+            response_model = TravelBooking
+        elif state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
+            response_model = DestinationRecommendation
+        for field, field_info in response_model.model_fields.items():
             struct[field] = field_info.description
         struct = json.dumps(struct)
 
@@ -256,7 +268,7 @@ class TravelMCPClient(StateGraph):
                 "structure": struct,
             }
         )
-        validation_result = TravelBooking.partial_validate(response)
+        validation_result = response_model.partial_validate(response)
         if validation_result.errors:
             return Command(
                 update={

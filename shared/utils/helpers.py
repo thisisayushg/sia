@@ -1,4 +1,5 @@
 import asyncio
+from pydantic import BaseModel
 from functools import wraps
 
 
@@ -19,3 +20,22 @@ def retry(max_retries=3, delay=1, on_failure=None):
                     await asyncio.sleep(delay)
         return wrapper
     return decorator
+
+def generate_field_description(model: BaseModel):
+    required_fields = []
+    optional_fields = []
+    
+    for field_name, field in model.model_fields.items():
+        field_type = field.annotation
+        field_description = field.description
+        is_optional = field.is_required()
+        
+        if is_optional:
+            optional_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
+        else:
+            required_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
+    
+    required_info = "\n".join(required_fields)
+    optional_info = "\n".join(optional_fields)
+    
+    return f"## Required Information \n{required_info}\n\n## Optional Information - DONT Ask again if not provided with mandatory information. Assert safe default values for them\n{optional_info}"
