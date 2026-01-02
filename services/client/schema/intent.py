@@ -6,9 +6,11 @@ class UserIntent(Enum):
     OTHER = ("Other", "Any other intent which cannot be classified among one of the above")
 
     
-    def __init__(self, value, description=None):
-        self._value_ = value
-        self.description = description
+    def __new__(cls, value, description):
+        obj = object.__new__(cls)
+        obj._value_ = value
+        obj.description = description
+        return obj
 
     @property
     def desc(self):
