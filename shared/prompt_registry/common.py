@@ -24,10 +24,4 @@ consider it as blank.
 - If the user says no budget constraint, interpret it as infinite
 - If the user insists for budget stays, get an average budget of stays in the location and consider it as the budget.
 
-Return ONLY a JSON output parsible as a python dictionary.
-It should have the following structure with exact key names:
-
-{structure}
-
-DO NOT include any reasoning with any key except the key called reasoning, unless explicity specified for any other key.
 """
