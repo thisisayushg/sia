@@ -1,6 +1,7 @@
 import asyncio
 from pydantic import BaseModel
 from functools import wraps
+from typing import get_origin, get_args, Union
 
 
 def retry(max_retries=3, delay=1, on_failure=None):
@@ -21,14 +22,31 @@ def retry(max_retries=3, delay=1, on_failure=None):
         return wrapper
     return decorator
 
+
+
+def get_base_type(annotation):
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    # Optional[T] or T | None
+    if origin is Union and len(args) == 2 and type(None) in args:
+        return next(arg.__name__ for arg in args if arg is not type(None))
+
+     # Builtins & classes
+    if isinstance(annotation, type):
+        return annotation.__name__
+
+    # Fallback (typing objects)
+    return str(annotation)
+
 def generate_field_description(model: BaseModel):
     required_fields = []
     optional_fields = []
     
     for field_name, field in model.model_fields.items():
-        field_type = field.annotation
+        field_type = get_base_type(field.annotation)
         field_description = field.description
-        is_optional = field.is_required()
+        is_optional = not field.is_required()
         
         if is_optional:
             optional_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
