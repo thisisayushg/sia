@@ -256,7 +256,7 @@ class TravelMCPClient(StateGraph):
         elif state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
             response_model = DestinationRecommendation
         for field, field_info in response_model.model_fields.items():
-            struct[field] = field_info.description
+            struct[field] = f"{field_info.description}. Consider {'null' if field_info.default is None else field_info.default} if not provided"
         struct = json.dumps(struct)
 
         chain = chat | self.llm | JsonOutputParser()

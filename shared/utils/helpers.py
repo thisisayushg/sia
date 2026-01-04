@@ -58,9 +58,9 @@ def generate_field_description(model: BaseModel):
         is_optional = not field.is_required() # is_required() doesnt work if field is doesnt contain any default values
         is_optional = is_field_optional(field.annotation)
         if is_optional:
-            optional_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
+            optional_fields.append(f"- {field_name}[{field_type}]: {field_description}. Consider {field.default} if not provided")
         else:
-            required_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
+            required_fields.append(f"- {field_name}[{field_type}]: {field_description}. Consider {field.default} if not provided")
     
     required_info = "\n".join(required_fields)
     optional_info = "\n".join(optional_fields)
