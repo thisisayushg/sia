@@ -13,9 +13,12 @@ class TravelBooking(PartialValidationMixin, BaseModel):
     reasoning: Annotated[str, Field(..., description="All the reasoning behind each of the extracted value. Also include current date in words in this reasoning")]
 
 class DestinationRecommendation(PartialValidationMixin, BaseModel):
-    budget_per_night: Annotated[float, Field(..., gt=0, description="Budget per night in INR")]
+    budget_per_night: Annotated[Optional[float], Field(..., gt=0, description="Budget per night in INR")]
+    total_budget: Annotated[Optional[int], Field(..., gt=0, description="Total budget for the trip in INR")]
     purpose: Annotated[Optional[str], Field(None, description="Purpose of travel such as relaxation, adventure, culture, family time,")]
     duration: Annotated[Optional[int], Field(1, description="Duration of the travel including the transportation and stay (in number of days)")]
     trip_start: Annotated[date, Field(..., description="Expected start date of the trip")]
     trip_end: Annotated[date, Field(..., description="Expected end date of the trip")]
-    start_location: Annotated[str, Field(..., description="Start location of the trip. Could be current location of the user as well.")]
+    start_location: Annotated[Optional[str], Field(..., description="Start location of the trip. Could be current location of the user as well.")]
+    reasoning: Annotated[str, Field(..., description="All the reasoning behind each of the extracted value. Also include current date in words in this reasoning")]
+
