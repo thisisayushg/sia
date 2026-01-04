@@ -39,6 +39,15 @@ def get_base_type(annotation):
     # Fallback (typing objects)
     return str(annotation)
 
+def is_field_optional(annotation) -> bool:
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    return (
+        origin is Union
+        and type(None) in args
+    )
+
 def generate_field_description(model: BaseModel):
     required_fields = []
     optional_fields = []
@@ -46,8 +55,8 @@ def generate_field_description(model: BaseModel):
     for field_name, field in model.model_fields.items():
         field_type = get_base_type(field.annotation)
         field_description = field.description
-        is_optional = not field.is_required()
-        
+        is_optional = not field.is_required() # is_required() doesnt work if field is doesnt contain any default values
+        is_optional = is_field_optional(field.annotation)
         if is_optional:
             optional_fields.append(f"- {field_name}: {field_type}, Description: {field_description}")
         else:
