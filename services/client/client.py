@@ -1,6 +1,8 @@
 import sys
 import pathlib
 
+from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION
+
 project_dir = pathlib.Path(__file__).parents[2]
 sys.path.append(project_dir)
 
@@ -38,12 +40,12 @@ from langchain_core.globals import set_debug
 set_debug(True)
 from langgraph.checkpoint.memory import InMemorySaver
 from datetime import datetime
-from typing import Dict, Literal, TypedDict, Union
+from typing import Dict, List, Literal, TypedDict, Union
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from .schema.booking_details import DestinationRecommendation, TravelBooking
+from .schema.booking_details import DestinationRecommendation, TravelBooking, TravelDestination, TravelDestinationRecommendations
 from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -277,7 +279,10 @@ class TravelMCPClient(StateGraph):
                 },
                 goto="gather_requirements",
             )
-        return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="check_stays", graph=Command.PARENT)
+        if state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
+            return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="recommend_suitable_destination", graph=Command.PARENT)
+        else:
+            return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="check_stays", graph=Command.PARENT)
     
     async def _check_for_stays(self, state: ElicitationState):
         last_message = state['messages'][-1]
@@ -286,6 +291,23 @@ class TravelMCPClient(StateGraph):
             response = await agent.ainvoke({'messages':[last_message]})
         except Exception as e:
             print(e)
+        return response
+    
+    async def _recommend_suitable_destination(self, state: ElicitationState):
+        last_message = state['messages'][-1]
+        agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=DESTINATION_DISCOVER_INSTRUCTION,  middleware=[handle_tool_errors], response_format=TravelDestinationRecommendations)
+        try:
+            response = await agent.ainvoke({'messages':[last_message]})
+        except Exception as e:
+            print(e)
+        for destination in response:
+            travel_info = {**destination, **state['requirements_gathered']}
+            
+            agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=DESTINATION_PROFILE_INSTRUCTION,  middleware=[handle_tool_errors])
+            try:
+                response = await agent.ainvoke({'messages':[last_message]})
+            except Exception as e:
+                print(e)
         return response
 
     def _create_elicitation_subgraph(self):
@@ -309,6 +331,7 @@ class TravelMCPClient(StateGraph):
         self.add_node("supervisor", self.supervisor)
         self.add_node("general",self.general)
         self.add_node("check_stays", self._check_for_stays)
+        self.add_node("recommend_suitable_destination", self._recommend_suitable_destination)
 
         eli_subgraph = self._create_elicitation_subgraph()
         self.add_node("elicitation", eli_subgraph)
@@ -316,6 +339,7 @@ class TravelMCPClient(StateGraph):
     def connect_nodes(self):
         self.add_edge(START, "supervisor")
         self.add_edge("check_stays", END)
+        self.add_edge("recommend_suitable_destination", END)
 
     async def connect_to_mcp_servers(self):
         self.general_toolkit, self.booking_toolkit = [], []
