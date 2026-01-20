@@ -29,3 +29,13 @@ It should have the following structure with exact key names:
 
 DO NOT include any reasoning with any key except the key called reasoning, unless explicity specified for any other key.
 """
+
+
+TOOL_CLASSIFICATION_INSTRUCTION="""
+Given a set of tools with their descriptions, classify the tools as
+{tool_classes}
+
+Tools
+------
+{tools}
+"""

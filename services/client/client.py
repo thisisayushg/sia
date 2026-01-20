@@ -1,3 +1,4 @@
+from collections import defaultdict
 import sys
 import pathlib
 
@@ -32,6 +33,7 @@ from shared.prompt_registry.general import (
     INFER_USER_INTENT,
     GENERAL_SYSTEM_PROMPT,
     JSON_RETURN_INSTRUCTION,
+    TOOL_CLASSIFICATION_INSTRUCTION,
 )
 
 load_dotenv()
@@ -52,12 +54,12 @@ from langchain_core.prompts import (
     SystemMessagePromptTemplate,
     MessagesPlaceholder,
     HumanMessagePromptTemplate,
+    PromptTemplate
 )
 from langchain.agents import create_agent
 from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
-
-
+from .schema.tool_classification import ToolClassification
 
 class ElicitationState(MessagesState):
     requirements_gathered: Dict = {}
@@ -343,24 +345,54 @@ class TravelMCPClient(StateGraph):
 
     async def connect_to_mcp_servers(self):
         self.general_toolkit, self.booking_toolkit = [], []
-        tools = await self.connect_to_server("http://localhost:8000/mcp")
-        self.booking_toolkit.extend(tools)
+        tools = []
+        tools.extend(
+            await self.connect_to_server("http://localhost:8000/mcp")
+        )
         
         # Tavily Search MCP Server
-        tools = await self.connect_to_server("http://localhost:2400/mcp")
-        self.general_toolkit.extend(tools)
+        tools.extend(
+            await self.connect_to_server("http://localhost:2400/mcp")
+        )
 
         # OpenWeather MCP Server
-        tools = await self.connect_to_server("http://localhost:3400/mcp")
-        self.general_toolkit.extend(tools)
+        tools.extend(
+            await self.connect_to_server("http://localhost:3400/mcp")
+        )
 
         # OpenStreet Map MCP Server
-        tools = await self.connect_to_server("http://localhost:4400/mcp")
-        self.general_toolkit.extend(tools)
+        tools.extend(
+            await self.connect_to_server("http://localhost:4400/mcp")
+        )
 
         # OpenBNB MCP Server
-        tools = await self.connect_to_server("http://localhost:5400/mcp")
-        self.booking_toolkit.extend(tools)
+        tools.extend(
+            await self.connect_to_server("http://localhost:5400/mcp")
+        )
+        struct = {}
+        for field, field_info in ToolClassification.model_fields.items():
+            if field_info.default_factory is not None:
+                dfault = f"Consider {eval(field_info.default_factory.__name__)()} if not provided"
+            else:
+                dfault = f"Consider {'null' if field_info.default is None else field_info.default} if not provided"
+            struct[field] = f"{field_info.description}. " + dfault
+        struct = json.dumps(struct)
+        prompt = PromptTemplate.from_template(TOOL_CLASSIFICATION_INSTRUCTION + JSON_RETURN_INSTRUCTION)
+
+        chain =  prompt | self.llm |JsonOutputParser()
+        response = chain.invoke({
+            'tool_classes': '\n- '.join(ToolClassification.model_fields),
+            'structure': struct,
+            'tools':  '\n- '.join([f"{t.name}: {t.description.partition("Args:\n")[0]}" for t in tools])
+        })
+        response = ToolClassification.model_validate(response)
+        self.tools_collection = defaultdict(list)
+        for category, toolnames in response:
+            for toolname in toolnames:
+                for t in tools:
+                    if t.name == toolname:
+                        self.tools_collection[category].append(t)
+                        break
 
     async def cleanup(self):
         await self.exit_stack.aclose()
