@@ -60,6 +60,13 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
 from .schema.tool_classification import ToolClassification
+from langchain_core.rate_limiters import InMemoryRateLimiter
+
+rate_limiter = InMemoryRateLimiter(
+    requests_per_second=1,  # <-- Can only make a request once every 10 seconds!!
+    check_every_n_seconds=0.2,  # Wake up every 100 ms to check whether allowed to make a request,
+    max_bucket_size=10,  # Controls the maximum burst size.
+)
 
 class ElicitationState(MessagesState):
     requirements_gathered: Dict = {}
@@ -83,6 +90,8 @@ async def handle_failure(*args, error=None, **kwargs):
 async def handle_tool_errors(request, handler):
     try:
         return await handler(request)
+    except asyncio.CancelledError as e:
+        return "Tool execution timed out or was cancelled"
     except Exception as e:
         toolmsg = ToolMessage(
                 content=
@@ -99,7 +108,8 @@ class TravelMCPClient(StateGraph):
         super().__init__(ElicitationState)
         self.llm = AzureChatOpenAI(
             api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
-            azure_deployment=os.getenv("AZURE_DEPLOYMENT_ANME")
+            azure_deployment=os.getenv("AZURE_DEPLOYMENT_ANME"),
+            rate_limiter=rate_limiter
         )
         self.exit_stack = AsyncExitStack()
 
