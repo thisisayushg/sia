@@ -2,7 +2,7 @@ from collections import defaultdict
 import sys
 import pathlib
 
-from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION
+from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION
 
 project_dir = pathlib.Path(__file__).parents[2]
 sys.path.append(project_dir)
@@ -47,7 +47,7 @@ from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
-from .schema.booking_details import DestinationRecommendation, TravelBooking, TravelDestination, TravelDestinationRecommendations
+from .schema.booking_details import DestinationRecommendation, TravelBooking, TravelSearchResultCollection
 from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -71,6 +71,10 @@ rate_limiter = InMemoryRateLimiter(
 class ElicitationState(MessagesState):
     requirements_gathered: Dict = {}
     intent: UserIntent = None
+
+class RecommendationState(MessagesState):
+    requirements_gathered: Dict = {}
+    web_search_results = []
 
 
 
@@ -292,7 +296,7 @@ class TravelMCPClient(StateGraph):
                 goto="gather_requirements",
             )
         if state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
-            return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="recommend_suitable_destination", graph=Command.PARENT)
+            return Command(update={'messages': [AIMessage(json.dumps(response))], "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data}}, goto="recommend_suitable_destination", graph=Command.PARENT)
         else:
             return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="check_stays", graph=Command.PARENT)
     
@@ -305,22 +309,46 @@ class TravelMCPClient(StateGraph):
             print(e)
         return response
     
-    async def _recommend_suitable_destination(self, state: ElicitationState):
+    async def _perform_web_search(self, state: ElicitationState)->:
         last_message = state['messages'][-1]
-        agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=DESTINATION_DISCOVER_INSTRUCTION,  middleware=[handle_tool_errors], response_format=TravelDestinationRecommendations)
-        try:
-            response = await agent.ainvoke({'messages':[last_message]})
-        except Exception as e:
-            print(e)
-        for destination in response:
-            travel_info = {**destination, **state['requirements_gathered']}
-            
-            agent = create_agent(model=self.llm, tools=self.general_toolkit, system_prompt=DESTINATION_PROFILE_INSTRUCTION,  middleware=[handle_tool_errors])
-            try:
-                response = await agent.ainvoke({'messages':[last_message]})
-            except Exception as e:
-                print(e)
-        return response
+        requirements_gathered = state['requirements_gathered']
+        toolkit = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
+        system_prompt = WEB_SEARCH_INSTRUCTION.format(source_count = 5, user_preferences = requirements_gathered)
+        for t in toolkit:
+            print(t.name)
+        agent = create_agent(model=self.llm, tools=toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors], response_format=TravelSearchResultCollection)
+        response = await agent.ainvoke({'messages':[last_message]})
+        if response.get("structured_response"):
+            results: TravelSearchResultCollection = response['structured_response']
+            return {'web_search_results': results.search_results}
+
+        return {}
+    
+    def _parse_webpage(self, state: RecommendationState):
+        web_search_results = state['web_search_results']
+
+    def _md_conversion(self, state: ElicitationState):
+        ...
+
+    def _investigate_places(self, state: ElicitationState):
+        ...
+    
+    def _create_recommendation_subgraph(self):
+        destination_recommendation_subgraph = StateGraph(ElicitationState)
+        self._create_recommendation_nodes(destination_recommendation_subgraph)
+        self._connect_recommendation_nodes(destination_recommendation_subgraph)
+
+    def _create_recommendation_nodes(self, graph: StateGraph):
+        graph.add_node("perform_websearch", self._perform_web_search)
+        graph.add_node("parse_webpage", self._parse_webpage)
+        graph.add_node("convert_tro_markdown", self._md_conversion)
+        graph.add_node("investigate_places", self._investigate_places)
+
+    def _connect_recommendation_nodes(self, graph: StateGraph):
+        graph.add_edge("perform_websearch", "parse_webpage")
+        graph.add_edge("parse_webpage", "convert_to_markdown")
+        graph.add_edge("convert_to_markdown", "investigate_places")
+        graph.add_edge("investigate_places", END)
 
     def _create_elicitation_subgraph(self):
         eli_subgraph = StateGraph(ElicitationState)
@@ -343,7 +371,9 @@ class TravelMCPClient(StateGraph):
         self.add_node("supervisor", self.supervisor)
         self.add_node("general",self.general)
         self.add_node("check_stays", self._check_for_stays)
-        self.add_node("recommend_suitable_destination", self._recommend_suitable_destination)
+
+        dest_recommendation_subgraph = self._create_recommendation_subgraph()
+        self.add_node("recommend_suitable_destination", dest_recommendation_subgraph)
 
         eli_subgraph = self._create_elicitation_subgraph()
         self.add_node("elicitation", eli_subgraph)

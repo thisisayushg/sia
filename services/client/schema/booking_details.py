@@ -2,6 +2,7 @@ from datetime import date
 from pydantic import BaseModel, Field
 from shared.utils.pydantic_validator import PartialValidationMixin
 from typing import Annotated, Optional, List
+from .web_result import WebSearchResultCollection, WebSearchResult
 
 class TravelBooking(PartialValidationMixin, BaseModel):
     number_of_adults: Annotated[int, Field(..., gt=0, description="Number of adult travelers")]
@@ -47,3 +48,16 @@ class TravelDestination(BaseModel):
 
 class TravelDestinationRecommendations(BaseModel):
     destinations: List[TravelDestination]
+
+from enum import Enum
+
+class TravelPurpose(Enum):
+    RELAXATION = 1
+    FAMILY_TIME = 2
+    ADVENTURE = 3
+
+class TravelSearchResult(WebSearchResult):
+    purpose: TravelPurpose = Field(description="The purpose of travel as given by the user")
+
+class TravelSearchResultCollection(WebSearchResultCollection[TravelSearchResult]):
+    pass
