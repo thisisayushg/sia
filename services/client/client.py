@@ -2,11 +2,11 @@ from collections import defaultdict
 import sys
 import pathlib
 
-from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION
 
 project_dir = pathlib.Path(__file__).parents[2]
 sys.path.append(project_dir)
 
+from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION
 import asyncio
 import json
 from uuid import uuid4
@@ -48,6 +48,7 @@ from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
 from .schema.booking_details import DestinationRecommendation, TravelBooking, TravelSearchResultCollection
+from .schema.scraping_result import ScrapingResultCollection
 from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -309,7 +310,7 @@ class TravelMCPClient(StateGraph):
             print(e)
         return response
     
-    async def _perform_web_search(self, state: ElicitationState)->:
+    async def _perform_web_search(self, state: ElicitationState):
         last_message = state['messages'][-1]
         requirements_gathered = state['requirements_gathered']
         toolkit = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
@@ -338,13 +339,16 @@ class TravelMCPClient(StateGraph):
         self._create_recommendation_nodes(destination_recommendation_subgraph)
         self._connect_recommendation_nodes(destination_recommendation_subgraph)
 
+        return destination_recommendation_subgraph.compile()
+
     def _create_recommendation_nodes(self, graph: StateGraph):
         graph.add_node("perform_websearch", self._perform_web_search)
         graph.add_node("parse_webpage", self._parse_webpage)
-        graph.add_node("convert_tro_markdown", self._md_conversion)
+        graph.add_node("convert_to_markdown", self._md_conversion)
         graph.add_node("investigate_places", self._investigate_places)
 
     def _connect_recommendation_nodes(self, graph: StateGraph):
+        graph.add_edge(START, "perform_websearch")
         graph.add_edge("perform_websearch", "parse_webpage")
         graph.add_edge("parse_webpage", "convert_to_markdown")
         graph.add_edge("convert_to_markdown", "investigate_places")
