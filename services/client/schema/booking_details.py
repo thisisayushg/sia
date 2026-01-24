@@ -59,5 +59,5 @@ class TravelPurpose(Enum):
 class TravelSearchResult(WebSearchResult):
     purpose: TravelPurpose = Field(description="The purpose of travel as given by the user")
 
-class TravelSearchResultCollection(WebSearchResultCollection[TravelSearchResult]):
+class TravelSearchResultCollection(WebSearchResultCollection):
     pass

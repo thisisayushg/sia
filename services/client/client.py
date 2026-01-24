@@ -310,20 +310,42 @@ class TravelMCPClient(StateGraph):
             print(e)
         return response
     
-    async def _perform_web_search(self, state: ElicitationState):
+    async def _perform_web_search(self, state: RecommendationState):
         last_message = state['messages'][-1]
         requirements_gathered = state['requirements_gathered']
         toolkit = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
-        system_prompt = WEB_SEARCH_INSTRUCTION.format(source_count = 5, user_preferences = requirements_gathered)
+        system_prompt = PromptTemplate.from_template(WEB_SEARCH_INSTRUCTION + JSON_RETURN_INSTRUCTION + TRANSPERANCY_INSTRUCTION)
+        fields = [
+            f"""
+            {field}:  {field_info.description}. Consider {'null' if field_info.default is None else field_info.default} if not provided,
+            """
+            for field, field_info in TravelSearchResult.model_fields.items()
+        ]
+        struct = f"""
+            {{
+                "search_results": [
+                    {{
+                        {"\n".join(fields)}
+                    }}
+                ]
+            }}
+        """
+        system_prompt = system_prompt.format(source_count = 5, user_preferences = requirements_gathered, structure=struct)
         for t in toolkit:
             print(t.name)
-        agent = create_agent(model=self.llm, tools=toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors], response_format=TravelSearchResultCollection)
+        # CAnt use response format since multiple tool calls throw error
+        # even if same tool is called twice in parallel. Model needs to be given explicit instruction to 
+        # concatenate multiple tool call results but prompting is unreliable
+        agent = create_agent(model=self.llm, tools=toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]) 
         response = await agent.ainvoke({'messages':[last_message]})
-        if response.get("structured_response"):
-            results: TravelSearchResultCollection = response['structured_response']
-            return {'web_search_results': results.search_results}
 
-        return {}
+        try:
+            ai_response = response['messages'][-1]
+            response = JsonOutputParser().parse(ai_response.content)
+        except Exception as e:
+            print(e)
+        results: TravelSearchResultCollection = TravelSearchResultCollection.model_validate(response)
+        return {'web_search_results': results.search_results}
     
     def _parse_webpage(self, state: RecommendationState):
         web_search_results = state['web_search_results']
@@ -335,7 +357,7 @@ class TravelMCPClient(StateGraph):
         ...
     
     def _create_recommendation_subgraph(self):
-        destination_recommendation_subgraph = StateGraph(ElicitationState)
+        destination_recommendation_subgraph = StateGraph(RecommendationState)
         self._create_recommendation_nodes(destination_recommendation_subgraph)
         self._connect_recommendation_nodes(destination_recommendation_subgraph)
 
