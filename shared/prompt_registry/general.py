@@ -4,6 +4,8 @@ Given a query by the user, your task is to find the user intent.
 ## Return
 The user intent should be classified among the following categories:
 {intent_categories}
+
+Only return name of the suitable category. No reasoning is required. No prefix or suffix is required.
 """
 
 
@@ -38,4 +40,8 @@ Given a set of tools with their descriptions, classify the tools as
 Tools
 ------
 {tools}
+"""
+
+TRANSPERANCY_INSTRUCTION="""
+Whenever using a tool, provide an explanation of why the tool was selected, and the arguments you decided to pass into the tool.
 """
