@@ -15,6 +15,7 @@ class RecommendationSubgraph(StateGraph):
     def __init__(self, llm, toolkit):
         self.llm = llm
         self.toolkit = toolkit
+        super().__init__(RecommendationState)
     
     async def _perform_web_search(self, state: RecommendationState):
         last_message = state['messages'][-1]
@@ -67,7 +68,7 @@ class RecommendationSubgraph(StateGraph):
         
         response = chain.invoke({
             'scraping_sources': web_search_results,
-            'struct': struct
+            'structure': struct
         })
         return {'scraping_result': response}
     

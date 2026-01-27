@@ -48,6 +48,7 @@ from ..schema.graph_states import ElicitationState
 class StaySesarchSubgraph(StateGraph):
     def __init__(self, llm):
         self.llm = llm
+        super().__init__(ElicitationState)
 
     async def gather_requirements(self, state: ElicitationState):
         if state["intent"] == UserIntent.STAY_SEARCH:
