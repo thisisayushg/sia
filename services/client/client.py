@@ -6,7 +6,6 @@ import pathlib
 project_dir = pathlib.Path(__file__).parents[2]
 sys.path.append(project_dir)
 
-from shared.prompt_registry.destination_recommendation import DESTINATION_DISCOVER_INSTRUCTION, DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION
 import asyncio
 import json
 from uuid import uuid4
@@ -16,19 +15,9 @@ from mcp import ClientSession
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
-from shared.utils.helpers import generate_field_description
 import os
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
-from shared.prompt_registry.stay_search import (
-    GATHER_INFO_PROMPT,
-    REQUIREMENT_GATHERING_INSTRUCTION,
-    SEARCH_HOTELS_INSTRUCTION,
-    TRAVELLER_INTERPRETATION_INSTRUCTION
-)
-from shared.prompt_registry.common import (
-    INFORMATION_EXTRACTION_INSTRUCTION,
-)
 from shared.prompt_registry.general import (
     INFER_USER_INTENT,
     GENERAL_SYSTEM_PROMPT,
@@ -40,77 +29,33 @@ load_dotenv()
 from langchain_core.globals import set_debug
 
 set_debug(True)
+from shared.utils.helpers import messages_to_dicts
 from langgraph.checkpoint.memory import InMemorySaver
 from datetime import datetime
-from typing import Dict, List, Literal, TypedDict, Union
+from typing import Dict, Literal
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.types import interrupt, Command
-from langchain.messages import HumanMessage, AIMessage, SystemMessage
+from langchain.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import JsonOutputParser
-from .schema.booking_details import DestinationRecommendation, TravelBooking, TravelSearchResultCollection
-from .schema.scraping_result import ScrapingResultCollection
 from .schema.intent import UserIntent
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     MessagesPlaceholder,
-    HumanMessagePromptTemplate,
     PromptTemplate
 )
 from langchain.agents import create_agent
-from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
 from .schema.tool_classification import ToolClassification
-from langchain_core.rate_limiters import InMemoryRateLimiter
-
-rate_limiter = InMemoryRateLimiter(
-    requests_per_second=1,  # <-- Can only make a request once every 10 seconds!!
-    check_every_n_seconds=0.2,  # Wake up every 100 ms to check whether allowed to make a request,
-    max_bucket_size=10,  # Controls the maximum burst size.
-)
-
-class ElicitationState(MessagesState):
-    requirements_gathered: Dict = {}
-    intent: UserIntent = None
-
-class RecommendationState(MessagesState):
-    requirements_gathered: Dict = {}
-    web_search_results = []
-
-
-
-async def handle_failure(*args, error=None, **kwargs):
-    request, _ = args
-    toolmsg = ToolMessage(
-            content=
-            f"No data found. {str(error)}"
-            "Please stop processing this request.",
-            tool_call_id=request.tool_call["id"]
-        )
-
-    return Command(update={'messages': [toolmsg]}, goto=END)
-
-@wrap_tool_call
-# @retry(max_retries=1, delay=2, on_failure=handle_failure)
-async def handle_tool_errors(request, handler):
-    try:
-        return await handler(request)
-    except asyncio.CancelledError as e:
-        return "Tool execution timed out or was cancelled"
-    except Exception as e:
-        toolmsg = ToolMessage(
-                content=
-                f"No data found. {str(e)}"
-                "Please stop processing this request.",
-                tool_call_id=request.tool_call["id"]
-            )
-
-        return Command(update={'messages': [toolmsg]}, goto=END)
-
+from .utils.middleware import rate_limiter, handle_tool_errors
+from .schema.graph_states import ElicitationState, SupervisorState
+from .subgraphs.destination_recommendation import RecommendationSubgraph
+from .subgraphs.stay_search import StaySesarchSubgraph
+from shared.prompt_registry.stay_search import SEARCH_HOTELS_INSTRUCTION
 
 class TravelMCPClient(StateGraph):
     def __init__(self):
-        super().__init__(ElicitationState)
+        super().__init__(SupervisorState)
         self.llm = AzureChatOpenAI(
             api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
             azure_deployment=os.getenv("AZURE_DEPLOYMENT_ANME"),
@@ -224,83 +169,7 @@ class TravelMCPClient(StateGraph):
         last_message = state['messages'][-1]
         response = await agent.ainvoke(state)
         return Command(goto=END, update={'messages': response['messages']})
-    
-    async def gather_requirements(self, state: ElicitationState):
-        if state['intent'] == UserIntent.STAY_SEARCH:
-            response_model = TravelBooking
-        elif state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
-            response_model = DestinationRecommendation
 
-        req_opt_info = generate_field_description(response_model)
-        chat = ChatPromptTemplate(
-            [
-                SystemMessagePromptTemplate.from_template(
-                    REQUIREMENT_GATHERING_INSTRUCTION
-                ),
-                HumanMessagePromptTemplate.from_template(GATHER_INFO_PROMPT)
-            ]
-        )
-
-        chain = chat | self.llm
-
-        response = await chain.ainvoke(
-            {
-                "gathered_info": state["requirements_gathered"],
-                "information_description": req_opt_info
-            }
-        )
-        return {'messages': [response]}
-
-    async def present_interrupt(self, state: ElicitationState):
-        last_message = state['messages'][-1]
-        user_input = interrupt(last_message)
-
-        return {'messages': [HumanMessage(user_input)]}
-
-    async def validate_requirements(
-        self, state: ElicitationState
-    ) -> Command[Literal["gather_requirements", END]]:
-        prev_gathered_req = state.get('requirements_gathered', {})
-        chat = ChatPromptTemplate(
-            [
-                SystemMessagePromptTemplate.from_template(
-                    INFORMATION_EXTRACTION_INSTRUCTION + TRAVELLER_INTERPRETATION_INSTRUCTION + JSON_RETURN_INSTRUCTION
-                ),
-                MessagesPlaceholder(variable_name="chat_history"),
-            ]
-        )
-        struct = {}
-        if state['intent'] == UserIntent.STAY_SEARCH:
-            response_model = TravelBooking
-        elif state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
-            response_model = DestinationRecommendation
-        for field, field_info in response_model.model_fields.items():
-            struct[field] = f"{field_info.description}. Consider {'null' if field_info.default is None else field_info.default} if not provided"
-        struct = json.dumps(struct)
-
-        chain = chat | self.llm | JsonOutputParser()
-
-        response = await chain.ainvoke(
-            {
-                "chat_history": state["messages"],
-                "now": datetime.now(),
-                "structure": struct,
-            }
-        )
-        validation_result = response_model.partial_validate(response)
-        if validation_result.errors:
-            return Command(
-                update={
-                    'messages': [AIMessage(json.dumps(response))],
-                    "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data},
-                },
-                goto="gather_requirements",
-            )
-        if state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
-            return Command(update={'messages': [AIMessage(json.dumps(response))], "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data}}, goto="recommend_suitable_destination", graph=Command.PARENT)
-        else:
-            return Command(update={'messages': [AIMessage(json.dumps(response))]}, goto="check_stays", graph=Command.PARENT)
-    
     async def _check_for_stays(self, state: ElicitationState):
         last_message = state['messages'][-1]
         agent = create_agent(model=self.llm, tools=self.booking_toolkit, system_prompt=SEARCH_HOTELS_INSTRUCTION,  middleware=[handle_tool_errors])
@@ -309,100 +178,38 @@ class TravelMCPClient(StateGraph):
         except Exception as e:
             print(e)
         return response
-    
-    async def _perform_web_search(self, state: RecommendationState):
-        last_message = state['messages'][-1]
-        requirements_gathered = state['requirements_gathered']
-        toolkit = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
-        system_prompt = PromptTemplate.from_template(WEB_SEARCH_INSTRUCTION + JSON_RETURN_INSTRUCTION + TRANSPERANCY_INSTRUCTION)
-        fields = [
-            f"""
-            {field}:  {field_info.description}. Consider {'null' if field_info.default is None else field_info.default} if not provided,
-            """
-            for field, field_info in TravelSearchResult.model_fields.items()
-        ]
-        struct = f"""
-            {{
-                "search_results": [
-                    {{
-                        {"\n".join(fields)}
-                    }}
-                ]
-            }}
-        """
-        system_prompt = system_prompt.format(source_count = 5, user_preferences = requirements_gathered, structure=struct)
-        for t in toolkit:
-            print(t.name)
-        # CAnt use response format since multiple tool calls throw error
-        # even if same tool is called twice in parallel. Model needs to be given explicit instruction to 
-        # concatenate multiple tool call results but prompting is unreliable
-        agent = create_agent(model=self.llm, tools=toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]) 
-        response = await agent.ainvoke({'messages':[last_message]})
 
-        try:
-            ai_response = response['messages'][-1]
-            response = JsonOutputParser().parse(ai_response.content)
-        except Exception as e:
-            print(e)
-        results: TravelSearchResultCollection = TravelSearchResultCollection.model_validate(response)
-        return {'web_search_results': results.search_results}
-    
-    def _parse_webpage(self, state: RecommendationState):
-        web_search_results = state['web_search_results']
+    async def recommend_destination(self, state: ElicitationState):
+        response = await self.dest_recommendation_subgraph.ainvoke(state)
+        return response
 
-    def _md_conversion(self, state: ElicitationState):
-        ...
+    async def collect_info(self, state: ElicitationState)->Command[Literal['check_stays', 'recommend_suitable_destination']]:
+        response = await self.collect_info_subgraph.ainvoke(state)
+        # Only send forward last message since it will be concatenated with existing state because of how Command operates
+        last_message = response.get('messages')[-1]
+        r = {**response, 'messages': messages_to_dicts([last_message])}
 
-    def _investigate_places(self, state: ElicitationState):
-        ...
-    
-    def _create_recommendation_subgraph(self):
-        destination_recommendation_subgraph = StateGraph(RecommendationState)
-        self._create_recommendation_nodes(destination_recommendation_subgraph)
-        self._connect_recommendation_nodes(destination_recommendation_subgraph)
-
-        return destination_recommendation_subgraph.compile()
-
-    def _create_recommendation_nodes(self, graph: StateGraph):
-        graph.add_node("perform_websearch", self._perform_web_search)
-        graph.add_node("parse_webpage", self._parse_webpage)
-        graph.add_node("convert_to_markdown", self._md_conversion)
-        graph.add_node("investigate_places", self._investigate_places)
-
-    def _connect_recommendation_nodes(self, graph: StateGraph):
-        graph.add_edge(START, "perform_websearch")
-        graph.add_edge("perform_websearch", "parse_webpage")
-        graph.add_edge("parse_webpage", "convert_to_markdown")
-        graph.add_edge("convert_to_markdown", "investigate_places")
-        graph.add_edge("investigate_places", END)
-
-    def _create_elicitation_subgraph(self):
-        eli_subgraph = StateGraph(ElicitationState)
-
-        self._create_elicitation_nodes(eli_subgraph)
-        self._connect_elicitation_nodes(eli_subgraph)
-        return eli_subgraph.compile()
-
-    def _create_elicitation_nodes(self, graph: StateGraph):
-        graph.add_node("validate_requirements", self.validate_requirements)
-        graph.add_node("gather_requirements", self.gather_requirements)
-        graph.add_node("present_interrupt", self.present_interrupt)
-
-    def _connect_elicitation_nodes(self, graph: StateGraph):
-        graph.add_edge(START, "validate_requirements")
-        graph.add_edge("gather_requirements", "present_interrupt")
-        graph.add_edge("present_interrupt", "validate_requirements")
+        if state['intent'] == UserIntent.STAY_SEARCH:
+            return Command(update=r, goto="check_stays")
+        if state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
+            return Command(update=r, goto="recommend_suitable_destination")
+            response = await self.dest_recommendation_subgraph.ainvoke(state)
+            # Only send forward last message since it will be concatenated with existing state because of how Command operates
+            last_message = response.get('messages')[-1]
+            r = {**response, 'messages': messages_to_dicts([last_message])}
+            return Command(update={'messages': [AIMessage(json.dumps(response))], 'web_search_results': [], "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data}}, goto="recommend_suitable_destination", graph=Command.PARENT)
 
     def create_nodes(self):
         self.add_node("supervisor", self.supervisor)
         self.add_node("general",self.general)
         self.add_node("check_stays", self._check_for_stays)
 
-        dest_recommendation_subgraph = self._create_recommendation_subgraph()
-        self.add_node("recommend_suitable_destination", dest_recommendation_subgraph)
+        rec_tools = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
+        self.dest_recommendation_subgraph = RecommendationSubgraph(self.llm, toolkit=rec_tools)._create_recommendation_subgraph()
+        self.add_node("recommend_suitable_destination", self.recommend_destination)
 
-        eli_subgraph = self._create_elicitation_subgraph()
-        self.add_node("elicitation", eli_subgraph)
+        self.collect_info_subgraph = StaySesarchSubgraph(self.llm)._create_elicitation_subgraph()
+        self.add_node("elicitation", self.collect_info)
 
     def connect_nodes(self):
         self.add_edge(START, "supervisor")

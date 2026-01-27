@@ -2,7 +2,7 @@ import asyncio
 from pydantic import BaseModel
 from functools import wraps
 from typing import get_origin, get_args, Union
-
+from langchain_core.messages import AIMessage, HumanMessage
 
 def retry(max_retries=3, delay=1, on_failure=None):
     def decorator(func):
@@ -66,3 +66,17 @@ def generate_field_description(model: BaseModel):
     optional_info = "\n".join(optional_fields)
     
     return f"## Required Information \n{required_info}\n\n## Optional Information - DONT Ask again if not provided with mandatory information. Assert safe default values for them\n{optional_info}"
+
+
+def messages_to_dicts(messages):
+    return [
+        {
+            "role": (
+                "human" if isinstance(m, HumanMessage)
+                else "ai" if isinstance(m, AIMessage)
+                else "system"
+            ),
+            "content": m.content,
+        }
+        for m in messages
+    ]
