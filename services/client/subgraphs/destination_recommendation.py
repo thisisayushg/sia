@@ -54,7 +54,7 @@ class RecommendationSubgraph(StateGraph):
         return {'web_search_results': results.search_results}
     
     def _parse_webpage(self, state: RecommendationState):
-        web_search_results = state['web_search_results']
+        web_search_results: list[TravelSearchResult] = state['web_search_results']
         prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION)
         chain = prompt | self.llm | JsonOutputParser()
 
@@ -67,7 +67,7 @@ class RecommendationSubgraph(StateGraph):
             struct += f"{field}: {field_info.description}. {dfault}\n"
         
         response = chain.invoke({
-            'scraping_sources': web_search_results,
+            'scraping_sources': [result.url for result in web_search_results],
             'structure': struct
         })
         return {'scraping_result': response}
