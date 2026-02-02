@@ -68,6 +68,27 @@ def generate_field_description(model: BaseModel):
     return f"## Required Information \n{required_info}\n\n## Optional Information - DONT Ask again if not provided with mandatory information. Assert safe default values for them\n{optional_info}"
 
 
+def describe_model(model: type[BaseModel], indent: int = 0) -> str:
+    space = " " * indent
+    result = "{\n"
+
+    for field_name, field_info in model.model_fields.items():
+        annotation = field_info.annotation
+        description = field_info.description or ""
+
+        # Handle list fields (like list[ScrapingResult])
+        if get_origin(annotation) is list:
+            inner_model = get_args(annotation)[0]
+            result += f"{space}  '{field_name}': [\n"
+            result += describe_model(inner_model, indent + 4)
+            result += f"{space}  ]\n"
+        else:
+            result += f"{space}  '{field_name}': '{description}',\n"
+
+    result += f"{space}}}\n"
+    return result
+
+
 def messages_to_dicts(messages):
     return [
         {
