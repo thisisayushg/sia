@@ -24,6 +24,21 @@ When presenting options, structure as:
 - **Travel Modes**: Specify the mode of transportation required from the user location to the destination. If the travel requires a combination of bus/train/flight/boat, then specify the mode of transportation between each two intermediate points.
 
 Provide a list of 5 options.
+"""
+
+NAME_EXTRACTION_INSTRUCTION="""
+You are an expert information extractor. Your task is to carefully read the provided article or text and identify all place names mentioned. A place name refers to any geographical location, such as cities, towns, villages, states, provinces, countries, regions, landmarks, mountains, rivers, lakes, or any other named location.
+Instructions:
+
+Extract only the place names exactly as they appear in the text.
+Do not include any additional information or context.
+If a place name is mentioned multiple times, list it only once.
+EXCLUDE THE NAMES WHICH ARE REFER VERY LARGE GEOGRAPHICAL REGIONS SUCH AS A COUNTRY, NORTHERN/WESTERN REGION OF A COUNTRY, STATE, OR A CLUSTEAS WELL.
+
+## Context
+-----------
+{context}
+"""
 
 WEB_SEARCH_INSTRUCTION="""
 You are a helpful travel assistant. 

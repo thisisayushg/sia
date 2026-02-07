@@ -3,9 +3,11 @@ from typing import Dict, List
 from langchain.agents import create_agent
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from langgraph.types import Send
 from ..schema.booking_details import TravelSearchResultCollection, TravelSearchResult
 from ..schema.scraping_result import ScrapingResultCollection
-from shared.prompt_registry.destination_recommendation import WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, NAME_EXTRACTION_INSTRUCTION
+from ..schema.name_extraction import NameExtractionResult, NameExtractionResultCollection
+from shared.prompt_registry.destination_recommendation import DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, NAME_EXTRACTION_INSTRUCTION
 from shared.prompt_registry.general import JSON_RETURN_INSTRUCTION, TRANSPERANCY_INSTRUCTION
 from ..utils.middleware import handle_tool_errors
 from ..schema.graph_states import RecommendationState
@@ -71,14 +73,37 @@ class RecommendationSubgraph(StateGraph):
             print(e)
         results: ScrapingResultCollection = ScrapingResultCollection.model_validate(response)
         
-        return {'scraping_result': results.scraping_results}
+        return [Send('extract_places', {'scraping_result': result}) for result in results.scraping_results]
     
-    
-    def _md_conversion(self, state: RecommendationState):
-        ...
+    async def _investigate_place(self, state: RecommendationState):
+        last_message = state['messages'][-1]
+        travel_info = {'destination': state['recommendation'], **state['requirements_gathered']}
+        system_prompt = PromptTemplate.from_template(DESTINATION_PROFILE_INSTRUCTION).format(travel_info=travel_info)
+        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors])
 
-    def _investigate_places(self, state: RecommendationState):
-        ...
+        response = await agent.ainvoke({'messages': last_message})
+        try:
+            ai_response = response['messages'][-1]
+        except Exception as e:
+            print(e)
+
+        return {'messages': ai_response}
+    
+    async def _extract_places(self, state: RecommendationState):
+        d = []
+        last_message = state['messages'][-1]
+        system_prompt = PromptTemplate.from_template(NAME_EXTRACTION_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(context = state['scraping_result'].content)
+        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors], response_format=NameExtractionResultCollection)
+
+        response = await agent.ainvoke({'messages': last_message})
+        try:
+            ai_response = response['messages'][-1]
+            response = JsonOutputParser().parse(ai_response.content)
+            d.extend(response)
+        except Exception as e:
+            print(e)
+        d = list(set([_.lower() for _ in d]))
+        return [Send("investigate_place", {'recommendation': destination}) for destination in d]
     
     def _create_recommendation_subgraph(self):
         destination_recommendation_subgraph = StateGraph(RecommendationState)
@@ -90,12 +115,12 @@ class RecommendationSubgraph(StateGraph):
     def _create_recommendation_nodes(self, graph: StateGraph):
         graph.add_node("perform_websearch", self._perform_web_search)
         graph.add_node("parse_webpage", self._parse_webpage)
-        graph.add_node("convert_to_markdown", self._md_conversion)
         graph.add_node("extract_places", self._extract_places)
+        graph.add_node("investigate_place", self._investigate_place)
 
     def _connect_recommendation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "perform_websearch")
         graph.add_edge("perform_websearch", "parse_webpage")
         graph.add_edge("parse_webpage", "extract_places")
-        graph.add_edge("convert_to_markdown", "investigate_places")
-        graph.add_edge("investigate_places", END)
+        graph.add_edge("extract_places", "investigate_place")
+        graph.add_edge("investigate_place", END)

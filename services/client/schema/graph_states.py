@@ -1,6 +1,7 @@
 from typing import Dict
 from langgraph.graph import MessagesState
 from ..schema.intent import UserIntent
+from .scraping_result import ScrapingResult
 
 
 class SupervisorState(MessagesState):
@@ -13,5 +14,6 @@ class ElicitationState(SupervisorState):
 
 class RecommendationState(ElicitationState):
     requirements_gathered: Dict = {}
-    scraping_result: list[Dict] = [{}]
+    scraping_result: list[ScrapingResult] = [{}]
     web_search_results: list = []  # Type Annotation for each field in a GraphState is very important else it will not be injected in the state for next node, even if previous node returns a certain key
+    recommendation: str = ''
