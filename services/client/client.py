@@ -34,6 +34,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from datetime import datetime
 from typing import Dict, Literal
 from langgraph.graph import StateGraph, START, END, MessagesState
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt, Command
 from langchain.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import JsonOutputParser
@@ -280,7 +281,7 @@ async def main():
 
         # Generate thread_id for tracking state across interrupts (HITL)
         thread_id = uuid4()
-        config = {'configurable': {'thread_id': thread_id}}
+        config: RunnableConfig = {'configurable': {'thread_id': thread_id}, 'max_concurrency': 4}
         graph = travel_workflow.compile(checkpointer=InMemorySaver())
 
         conversation_history = []
