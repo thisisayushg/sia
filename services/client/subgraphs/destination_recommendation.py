@@ -63,7 +63,7 @@ class RecommendationSubgraph(StateGraph):
         struct = describe_model(ScrapingResultCollection)
         system_prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(scraping_sources=[result.url for result in web_search_results], structure=struct)
 
-        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]) 
+        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]).with_retry(retry_if_exception_type=(OutputParserException, ))
         response = await agent.ainvoke({'messages': [last_message]})
 
         try:
@@ -72,8 +72,13 @@ class RecommendationSubgraph(StateGraph):
         except Exception as e:
             print(e)
         results: ScrapingResultCollection = ScrapingResultCollection.model_validate(response)
-        
-        return [Send('extract_places', {'scraping_result': result}) for result in results.scraping_results]
+        return {'scraping_results': results}
+
+    def _broadcast_scraping_results(self, state: RecommendationState):
+        _ = []
+        for result in state['scraping_results'].scraping_results:
+            _.append(Send('extract_places', {'scraping_result': result.model_dump()}))
+        return _
     
     async def _investigate_place(self, state: RecommendationState):
         last_message = state['messages'][-1]
@@ -91,19 +96,13 @@ class RecommendationSubgraph(StateGraph):
     
     async def _extract_places(self, state: RecommendationState):
         d = []
-        last_message = state['messages'][-1]
-        system_prompt = PromptTemplate.from_template(NAME_EXTRACTION_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(context = state['scraping_result'].content)
+        scraping_result =  state['scraping_result']  # scraping_result is a deliberate key name not in the REcommendationState but used to send Send() in broadcase_scraping_result
+        system_prompt = PromptTemplate.from_template(NAME_EXTRACTION_INSTRUCTION).format(context = str(scraping_result))
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors], response_format=NameExtractionResultCollection)
 
-        response = await agent.ainvoke({'messages': last_message})
-        try:
-            ai_response = response['messages'][-1]
-            response = JsonOutputParser().parse(ai_response.content)
-            d.extend(response)
-        except Exception as e:
-            print(e)
-        d = list(set([_.lower() for _ in d]))
-        return [Send("investigate_place", {'recommendation': destination}) for destination in d]
+        response = await agent.ainvoke({'messages': str(scraping_result)})
+        result: NameExtractionResultCollection = response['structured_response']
+        return [Send("investigate_place", {'recommendation': destination}) for destination in result.extracted_names]
     
     def _create_recommendation_subgraph(self):
         destination_recommendation_subgraph = StateGraph(RecommendationState)
@@ -121,6 +120,6 @@ class RecommendationSubgraph(StateGraph):
     def _connect_recommendation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "perform_websearch")
         graph.add_edge("perform_websearch", "parse_webpage")
-        graph.add_edge("parse_webpage", "extract_places")
+        graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
         graph.add_edge("extract_places", "investigate_place")
         graph.add_edge("investigate_place", END)
