@@ -24,7 +24,10 @@ Current timestamp is {now}
 
 
 JSON_RETURN_INSTRUCTION="""
-Return ONLY a JSON output parsible as a python dictionary.
+Return ONLY a JSON output parsible as a JSON. 
+Return valid JSON only.
+Do not include trailing commas.
+Do not include markdown.
 It should have the following structure with exact key names:
 
 {structure}
