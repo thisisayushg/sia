@@ -182,7 +182,8 @@ class TravelMCPClient(StateGraph):
 
     async def recommend_destination(self, state: ElicitationState):
         response = await self.dest_recommendation_subgraph.ainvoke(state)
-        return response
+        aimessage = AIMessage(content=response.get('investigation_report'))
+        return {'messages': [aimessage]}
 
     async def collect_info(self, state: ElicitationState)->Command[Literal['check_stays', 'recommend_suitable_destination']]:
         response = await self.collect_info_subgraph.ainvoke(state)
