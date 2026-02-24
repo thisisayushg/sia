@@ -13,7 +13,7 @@ from ..utils.middleware import handle_tool_errors
 from ..schema.graph_states import RecommendationState
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import LanguageModelLike, BaseLanguageModel
-from shared.utils.helpers import describe_model
+import demjson3 as demjson
 
 
 class RecommendationSubgraph(StateGraph):
@@ -52,10 +52,12 @@ class RecommendationSubgraph(StateGraph):
         try:
             ai_response = response['messages'][-1]
             response = JsonOutputParser().parse(ai_response.content)
-        except Exception as e:
+        except OutputParserException as e:
+            response = demjson.decode(ai_response.content)
+        except Exception:
             print(e)
         results: TravelSearchResultCollection = TravelSearchResultCollection.model_validate(response)
-        return {'web_search_results': results.search_results}
+        return {'web_search_results': results.search_results[:5]}
     
     async def _parse_webpage(self, state: RecommendationState):
         last_message = state['messages'][-1]
@@ -69,10 +71,12 @@ class RecommendationSubgraph(StateGraph):
         try:
             ai_response = response['messages'][-1]
             response = JsonOutputParser().parse(ai_response.content)
-        except Exception as e:
+        except OutputParserException as e:
+            response = demjson.decode(ai_response.content)
+        except Exception:
             print(e)
         results: ScrapingResultCollection = ScrapingResultCollection.model_validate(response)
-        return {'scraping_results': results.scraping_results}
+        return {'scraping_results': results.scraping_results[:3]}
 
     def _broadcast_scraping_results(self, state: RecommendationState):
         _ = []
