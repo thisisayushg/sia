@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from functools import wraps
 from typing import get_origin, get_args, Union
 from langchain_core.messages import AIMessage, HumanMessage
+from rapidfuzz import fuzz
 
 def retry(max_retries=3, delay=1, on_failure=None):
     def decorator(func):
@@ -101,3 +102,65 @@ def messages_to_dicts(messages):
         }
         for m in messages
     ]
+
+def merge_ner_locations(ner_results):
+    merged_entities = []
+    current_entity = None
+
+    for token in ner_results:
+        label = token["entity"]
+
+        # Check if token is B-LOC
+        if label == "B-LOC":
+            # Save previous entity if exists
+            if current_entity:
+                merged_entities.append(current_entity)
+
+            # Start new entity
+            current_entity = {
+                "entity": "LOC",
+                "word": token["word"],
+                "start": token["start"],
+                "end": token["end"],
+                "score": token["score"]
+            }
+
+        # Check if token is I-LOC and we already started a LOC
+        elif label == "I-LOC" and current_entity:
+            if not token['word'].startswith("##"):
+                current_entity['word'] +=' '
+            current_entity["word"] += token["word"].replace("##", "")
+            current_entity["end"] = token["end"]
+            current_entity["score"] = max(current_entity["score"], token["score"])
+
+        else:
+            # If different label, close current LOC
+            if current_entity:
+                merged_entities.append(current_entity)
+                current_entity = None
+
+    # Append last entity if exists
+    if current_entity:
+        merged_entities.append(current_entity)
+
+    return merged_entities
+
+def filter_similar_phrases(items, similarity_threshold=85):
+    # Remove obvious noise like single-word "The"
+    from nltk.corpus import stopwords
+
+    items =  [i for i in items if i.lower() not in set(stopwords.words('english'))]
+
+    unique = []
+
+    for item in items:
+        is_duplicate = False
+        for existing in unique:
+            similarity = fuzz.token_sort_ratio(item.lower(), existing.lower())
+            if similarity >= similarity_threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique.append(item)
+
+    return unique

@@ -13,6 +13,9 @@ from ..utils.middleware import handle_tool_errors
 from ..schema.graph_states import RecommendationState
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import LanguageModelLike, BaseLanguageModel
+from shared.utils.helpers import describe_model, merge_ner_locations, filter_similar_phrases
+from transformers import AutoTokenizer, AutoModelForTokenClassification
+from transformers import pipeline
 import demjson3 as demjson
 
 
@@ -86,7 +89,7 @@ class RecommendationSubgraph(StateGraph):
     
     async def _investigate_place(self, state: RecommendationState):
         last_message = state['messages'][-1]
-        travel_info = {'destination': state['recommendation']['name'], **state['requirements_gathered']}
+        travel_info = {'destination': state['recommendation'], **state['requirements_gathered']}
         system_prompt = PromptTemplate.from_template(DESTINATION_PROFILE_INSTRUCTION).format(travel_info=travel_info)
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors])
 
@@ -99,19 +102,39 @@ class RecommendationSubgraph(StateGraph):
         return {'investigation_report': f"{ai_response.content}\n\n"}
     
     async def _extract_places(self, state: RecommendationState):
-        d = []
-        scraping_result =  state['scraping_result']  # scraping_result is a deliberate key name not in the REcommendationState but used to send Send() in broadcase_scraping_result
-        system_prompt = PromptTemplate.from_template(NAME_EXTRACTION_INSTRUCTION).format(context = str(scraping_result))
-        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors], response_format=NameExtractionResultCollection)
+        try:
+            d = []
+            scraping_result =  state['scraping_result']  # scraping_result is a deliberate key name not in the REcommendationState but used to send Send() in broadcase_scraping_result
+            tokenizer = AutoTokenizer.from_pretrained("dslim/bert-large-NER")
+            model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
 
-        response = await agent.ainvoke({'messages': str(scraping_result)})
-        result: NameExtractionResultCollection = response['structured_response']
-        return {'extracted_names': result.extracted_names}
-    
+            nlp = pipeline("ner", model=model, tokenizer=tokenizer)
+            result = nlp(scraping_result['content'])
+            # Merge B-LOC and I-LOC
+            places_found_with_ner  = merge_ner_locations(result)
+            places_found_with_ner = [r['word']+"\n" for r in places_found_with_ner]
+
+            with open('ner result.txt', 'a+') as file:
+                file.writelines(places_found_with_ner)
+                file.write('=============================\n')
+        except ValueError as e:
+            print("Value error", e)
+        return {'extracted_names': places_found_with_ner}
+        
+    def filter_duplicates(self, state: RecommendationState):
+
+        # 'extracted_names' key in graph state is annotated with oeprator.add
+        # Hence, each time this function is invoked, the resulting list is appended to an existing list of 'extracted_names'
+        # even if the call to this function was placed with Send() API which is for parallel execution
+        extracted_names = set([n.lower().strip() for n in state['extracted_names']])
+        # Approximate matching to filter duplicates
+        final_list = filter_similar_phrases(extracted_names)
+        return {'extracted_names': final_list}
+
     def _broadcast_extraction_result(self, state: RecommendationState):
         _ = []
         for destination in state['extracted_names']:
-            _.append(Send('investigate_place', {**state, 'recommendation': destination.model_dump()}))
+            _.append(Send('investigate_place', {**state, 'recommendation': destination}))
         return _
 
     def _create_recommendation_subgraph(self):
@@ -125,11 +148,13 @@ class RecommendationSubgraph(StateGraph):
         graph.add_node("perform_websearch", self._perform_web_search)
         graph.add_node("parse_webpage", self._parse_webpage)
         graph.add_node("extract_places", self._extract_places)
+        graph.add_node("filter_duplicate_names", self.filter_duplicates)
         graph.add_node("investigate_place", self._investigate_place)
 
     def _connect_recommendation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "perform_websearch")
         graph.add_edge("perform_websearch", "parse_webpage")
         graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
-        graph.add_conditional_edges("extract_places", self._broadcast_extraction_result, ['investigate_place'])
+        graph.add_edge("extract_places", "filter_duplicate_names")
+        graph.add_conditional_edges("filter_duplicate_names", self._broadcast_extraction_result, ['investigate_place'])
         graph.add_edge("investigate_place", END)
