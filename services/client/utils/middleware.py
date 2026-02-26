@@ -17,7 +17,10 @@ from langgraph.graph import END, MessagesState
 from langgraph.types import interrupt, Command
 from langchain.agents.middleware import wrap_tool_call
 from langchain.messages import ToolMessage
+from pydantic  import ValidationError
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain.tools import ToolException
+
 
 rate_limiter = InMemoryRateLimiter(
     requests_per_second=1,  # <-- Can only make a request once every 10 seconds!!
@@ -43,12 +46,12 @@ async def handle_tool_errors(request, handler):
         return await handler(request)
     except asyncio.CancelledError as e:
         return "Tool execution timed out or was cancelled"
-    except Exception as e:
-        toolmsg = ToolMessage(
-                content=
-                f"No data found. {str(e)}"
-                "Please stop processing this request.",
-                tool_call_id=request.tool_call["id"]
-            )
+    except (ValidationError, ToolException) as e:
+        if "unexpected keyword argument" in str(e).lower():
+            toolmsg = ToolMessage(
+                    content=
+                    f"Check the parameters provided. Possibly, you need to review the tool description for arguments",
+                    tool_call_id=request.tool_call["id"]
+                )
 
-        return Command(update={'messages': [toolmsg]}, goto=END)
+            return toolmsg
