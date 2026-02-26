@@ -17,6 +17,10 @@ from shared.utils.helpers import describe_model, merge_ner_locations, filter_sim
 from transformers import AutoTokenizer, AutoModelForTokenClassification
 from transformers import pipeline
 import demjson3 as demjson
+import asyncio
+import geograpy
+from country_state_city import Country, State
+from newspaper import ArticleException
 
 
 class RecommendationSubgraph(StateGraph):
@@ -24,7 +28,8 @@ class RecommendationSubgraph(StateGraph):
         self.llm = llm
         self.toolkit = toolkit
         super().__init__(RecommendationState)
-    
+        self.country_state_map = {c.name.lower(): [s.name.lower() for s in State.get_states_of_country(c.iso2)] for c in Country.get_countries()}
+
     async def _perform_web_search(self, state: RecommendationState):
         last_message = state['messages'][-1]
         requirements_gathered = state['requirements_gathered']
@@ -62,6 +67,42 @@ class RecommendationSubgraph(StateGraph):
         results: TravelSearchResultCollection = TravelSearchResultCollection.model_validate(response)
         return {'web_search_results': results.search_results[:5]}
     
+    async def _broadcast_search_results(self, state: RecommendationState):
+        web_search_results: list[TravelSearchResult] = state['web_search_results']
+        _ = []
+        for result in web_search_results:
+            _.append(Send('extract_places', {**state, 'web_search_result': result}))
+        return _
+
+
+    async def _extract_places_from_search_results(
+        self, 
+        state: RecommendationState
+    ):
+        web_search_result: TravelSearchResult = state["web_search_result"]
+
+        # Run blocking geograpy call in a thread
+        try:
+            places = await asyncio.wait_for(
+                asyncio.to_thread(
+                    geograpy.get_geoPlace_context,
+                    web_search_result.url
+                ),
+                timeout=225  # seconds
+            )
+        except ArticleException as e:
+            print(e)
+        cities = []
+        for city in places.cities:
+            if (
+                city.lower() not in self.country_state_map.values()
+                and 
+                city.lower() not in self.country_state_map.keys()
+            ):
+                cities.append(city)
+
+        return {"extracted_names": cities}
+
     async def _parse_webpage(self, state: RecommendationState):
         last_message = state['messages'][-1]
         web_search_results: list[TravelSearchResult] = state['web_search_results']
@@ -129,6 +170,14 @@ class RecommendationSubgraph(StateGraph):
         extracted_names = set([n.lower().strip() for n in state['extracted_names']])
         # Approximate matching to filter duplicates
         final_list = filter_similar_phrases(extracted_names)
+        from pathlib import Path
+
+        project_root = Path(__name__).resolve().parents[0]
+        regions_file = project_root / "assets" / "regions.txt"
+        if regions_file.exists():
+            content = regions_file.read_text()
+        
+        final_list = [item for item in final_list if item.lower() not in content.lower()]
         return {'extracted_names': final_list}
 
     def _broadcast_extraction_result(self, state: RecommendationState):
@@ -147,14 +196,14 @@ class RecommendationSubgraph(StateGraph):
     def _create_recommendation_nodes(self, graph: StateGraph):
         graph.add_node("perform_websearch", self._perform_web_search)
         graph.add_node("parse_webpage", self._parse_webpage)
-        graph.add_node("extract_places", self._extract_places)
+        graph.add_node("extract_places", self._extract_places_from_search_results)
         graph.add_node("filter_duplicate_names", self.filter_duplicates)
         graph.add_node("investigate_place", self._investigate_place)
 
     def _connect_recommendation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "perform_websearch")
-        graph.add_edge("perform_websearch", "parse_webpage")
-        graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
+        graph.add_conditional_edges("perform_websearch", self._broadcast_search_results, ["extract_places"])
+        # graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
         graph.add_edge("extract_places", "filter_duplicate_names")
         graph.add_conditional_edges("filter_duplicate_names", self._broadcast_extraction_result, ['investigate_place'])
         graph.add_edge("investigate_place", END)
