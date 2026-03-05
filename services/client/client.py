@@ -64,13 +64,13 @@ class TravelMCPClient(StateGraph):
         )
         self.exit_stack = AsyncExitStack()
 
-    async def connect_to_stdio_server(self, cmd: str, args: list):
+    async def connect_to_stdio_server(self, cmd: str, args: list, env: dict):
         # Local stack for error isolation
         local_stack = AsyncExitStack()
 
         try:
             # Define the server params
-            server_params = StdioServerParameters(command=cmd, args=args)
+            server_params = StdioServerParameters(command=cmd, args=args, env=env)
             # Create a transport context for STDIO
             transport_context = stdio_client(server_params)
 
