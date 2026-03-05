@@ -23,6 +23,7 @@ class DestinationRecommendation(PartialValidationMixin, BaseModel):
     trip_start: Annotated[date, Field(..., description="Expected start date of the trip")]
     trip_end: Annotated[date, Field(..., description="Expected end date of the trip")]
     start_location: Annotated[Optional[str], Field('', description="Start location of the trip. Could be current location of the user as well.")]
+    region: Annotated[Optional[str], Field('', description="A region like country, a continent, or a sub-region like North-East India specified by the user to recommend destinations within.")]
     reasoning: Annotated[str, Field('', description="All the reasoning behind each of the extracted value. Also include current date in words in this reasoning.  This is to be populated by you and not user")]
 
     # @model_validator(mode="after")
