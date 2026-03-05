@@ -104,13 +104,13 @@ class RecommendationSubgraph(StateGraph):
             ):
                 cities.append(city)
 
-        return {"extracted_names": cities}
+        return {"extracted_names": cities[:2]}
 
     async def _parse_webpage(self, state: RecommendationState):
         last_message = state['messages'][-1]
-        web_search_results: list[TravelSearchResult] = state['web_search_results']
+        web_search_result: TravelSearchResult = state['web_search_result']
         struct = describe_model(ScrapingResultCollection)
-        system_prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(scraping_sources=[result.url for result in web_search_results], structure=struct)
+        system_prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(scraping_sources=web_search_result.url, structure=struct)
 
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]).with_retry(retry_if_exception_type=(OutputParserException, ))
         response = await agent.ainvoke({'messages': [last_message]},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['parse_webpage']}})
