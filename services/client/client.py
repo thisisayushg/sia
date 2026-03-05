@@ -53,7 +53,9 @@ from .schema.graph_states import ElicitationState, SupervisorState
 from .subgraphs.destination_recommendation import RecommendationSubgraph
 from .subgraphs.stay_search import StaySesarchSubgraph
 from shared.prompt_registry.stay_search import SEARCH_HOTELS_INSTRUCTION
-
+from langfuse.langchain import CallbackHandler
+ 
+langfuse_handler = CallbackHandler()
 class TravelMCPClient(StateGraph):
     def __init__(self):
         super().__init__(SupervisorState)
@@ -258,8 +260,9 @@ class TravelMCPClient(StateGraph):
         response = chain.invoke({
             'tool_classes': '\n- '.join(ToolClassification.model_fields),
             'structure': struct,
-            'tools':  '\n- '.join([f"{t.name}: {t.description.partition("Args:\n")[0]}" for t in tools])
-        })
+            'tools':  '\n'.join([f"- {t.name}: {t.description.partition("Args:\n")[0]}" for t in tools])
+        }, 
+        config={'callbacks':  [langfuse_handler], 'metadata': {'langfuse_tags': ['tool_classification']}})
         response = ToolClassification.model_validate(response)
         self.tools_collection = defaultdict(list)
         for category, toolnames in response:

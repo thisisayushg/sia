@@ -3,7 +3,7 @@ from typing import Dict, List
 from langchain.agents import create_agent
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from langgraph.types import Send
+from langgraph.types import Command, Send
 from ..schema.booking_details import TravelSearchResultCollection, TravelSearchResult
 from ..schema.scraping_result import ScrapingResultCollection
 from ..schema.name_extraction import NameExtractionResult, NameExtractionResultCollection
@@ -20,8 +20,10 @@ import demjson3 as demjson
 import asyncio
 import geograpy
 from country_state_city import Country, State
-from newspaper import ArticleException
-
+from newspaper import ArticleBinaryDataException, ArticleException
+from langfuse.langchain import CallbackHandler
+ 
+langfuse_handler = CallbackHandler()
 
 class RecommendationSubgraph(StateGraph):
     def __init__(self, llm: BaseLanguageModel, toolkit):
@@ -55,7 +57,7 @@ class RecommendationSubgraph(StateGraph):
         # even if same tool is called twice in parallel. Model needs to be given explicit instruction to 
         # concatenate multiple tool call results but prompting is unreliable
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]) 
-        response = await agent.ainvoke({'messages':[last_message]})
+        response = await agent.ainvoke({'messages':[last_message]},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['web_search']}})
 
         try:
             ai_response = response['messages'][-1]
@@ -90,8 +92,9 @@ class RecommendationSubgraph(StateGraph):
                 ),
                 timeout=225  # seconds
             )
-        except ArticleException as e:
-            print(e)
+        except (ArticleException, ArticleBinaryDataException) as e:
+           return {'extracted_names': []}
+
         cities = []
         for city in places.cities:
             if (
@@ -110,7 +113,7 @@ class RecommendationSubgraph(StateGraph):
         system_prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(scraping_sources=[result.url for result in web_search_results], structure=struct)
 
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]).with_retry(retry_if_exception_type=(OutputParserException, ))
-        response = await agent.ainvoke({'messages': [last_message]})
+        response = await agent.ainvoke({'messages': [last_message]},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['parse_webpage']}})
 
         try:
             ai_response = response['messages'][-1]
@@ -134,7 +137,7 @@ class RecommendationSubgraph(StateGraph):
         system_prompt = PromptTemplate.from_template(DESTINATION_PROFILE_INSTRUCTION).format(travel_info=travel_info)
         agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors])
 
-        response = await agent.ainvoke({'messages': last_message})
+        response = await agent.ainvoke({'messages': last_message},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['investigate_place']}})
         try:
             ai_response = response['messages'][-1]
         except Exception as e:
@@ -178,7 +181,7 @@ class RecommendationSubgraph(StateGraph):
             content = regions_file.read_text()
         
         final_list = [item for item in final_list if item.lower() not in content.lower()]
-        return {'extracted_names': final_list}
+        return {'extracted_names': sorted(final_list)[:5]}
 
     def _broadcast_extraction_result(self, state: RecommendationState):
         _ = []
@@ -203,7 +206,7 @@ class RecommendationSubgraph(StateGraph):
     def _connect_recommendation_nodes(self, graph: StateGraph):
         graph.add_edge(START, "perform_websearch")
         graph.add_conditional_edges("perform_websearch", self._broadcast_search_results, ["extract_places"])
-        # graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
+        graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
         graph.add_edge("extract_places", "filter_duplicate_names")
         graph.add_conditional_edges("filter_duplicate_names", self._broadcast_extraction_result, ['investigate_place'])
         graph.add_edge("investigate_place", END)
