@@ -285,7 +285,7 @@ async def main():
 
         # Generate thread_id for tracking state across interrupts (HITL)
         thread_id = uuid4()
-        config: RunnableConfig = {'configurable': {'thread_id': thread_id}, 'max_concurrency': 4}
+        config: RunnableConfig = {'configurable': {'thread_id': thread_id}, 'max_concurrency': 2}
         graph = travel_workflow.compile(checkpointer=InMemorySaver())
 
         conversation_history = []
