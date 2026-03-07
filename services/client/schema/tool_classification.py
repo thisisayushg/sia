@@ -4,7 +4,7 @@ from typing import List, Dict
 class ToolClassification(BaseModel):
     web_tools: List[str] = Field(default_factory=list, description="""
 List containing name of the tools which could be useful for online/web activities and research. This includes tools like
-web search tools, web crawling and scraping tools, etc.
+web search tools, web crawling and scraping tools, etc. Only include the tools in this list which could not be fitted into any of the other specialized categories.
         """)
     weather_tools: List[str] = Field(default_factory=list, description="""
 List containing  Name of the Tools which can help assimilate weather related information like air quality, minimum and maximum temperatures,
