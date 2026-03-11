@@ -220,7 +220,7 @@ class TravelMCPClient(StateGraph):
         self.add_node("general",self.general)
         self.add_node("check_stays", self._check_for_stays)
 
-        rec_tools = self.tools_collection['web_tools'] + self.tools_collection['map_tools']
+        rec_tools = self.tools_collection.web_tools + self.tools_collection.map_tools
         self.dest_recommendation_subgraph = RecommendationSubgraph(self.llm, toolkit=rec_tools)._create_recommendation_subgraph()
         self.add_node("recommend_suitable_destination", self.recommend_destination)
 
