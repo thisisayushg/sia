@@ -43,6 +43,9 @@ from langchain_core.prompts import (
 from langchain.agents import create_agent
 from ..utils.middleware import handle_tool_errors
 from ..schema.graph_states import ElicitationState
+from langfuse.langchain import CallbackHandler
+ 
+langfuse_handler = CallbackHandler()
 
 
 class StaySesarchSubgraph(StateGraph):
@@ -72,7 +75,8 @@ class StaySesarchSubgraph(StateGraph):
             {
                 "gathered_info": state["requirements_gathered"],
                 "information_description": req_opt_info,
-            }
+            },
+            config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['gather_info']}}
         )
         return {"messages": [response]}
 
@@ -114,7 +118,8 @@ class StaySesarchSubgraph(StateGraph):
                 "chat_history": state["messages"],
                 "now": datetime.now(),
                 "structure": struct,
-            }
+            },
+            config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['validate_info']}}
         )
         validation_result = response_model.partial_validate(response)
         if validation_result.errors:

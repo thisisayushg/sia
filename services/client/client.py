@@ -177,7 +177,8 @@ class TravelMCPClient(StateGraph):
             {
                 "chat_history": [last_message],
                 "intent_categories": intent_categories
-            }
+            },
+            config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['infer_intent']}}
         )
         if response.content == UserIntent.OTHER.value:
             return Command(goto="general", update={})
@@ -213,11 +214,6 @@ class TravelMCPClient(StateGraph):
             return Command(update=r, goto="check_stays")
         if state['intent'] == UserIntent.DESTINATION_RECOMMENDATION:
             return Command(update=r, goto="recommend_suitable_destination")
-            response = await self.dest_recommendation_subgraph.ainvoke(state)
-            # Only send forward last message since it will be concatenated with existing state because of how Command operates
-            last_message = response.get('messages')[-1]
-            r = {**response, 'messages': messages_to_dicts([last_message])}
-            return Command(update={'messages': [AIMessage(json.dumps(response))], 'web_search_results': [], "requirements_gathered": {**prev_gathered_req, **validation_result.valid_data}}, goto="recommend_suitable_destination", graph=Command.PARENT)
 
     def create_nodes(self):
         self.add_node("supervisor", self.supervisor)
