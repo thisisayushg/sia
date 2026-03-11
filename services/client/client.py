@@ -54,17 +54,33 @@ from .subgraphs.destination_recommendation import RecommendationSubgraph
 from .subgraphs.stay_search import StaySesarchSubgraph
 from shared.prompt_registry.stay_search import SEARCH_HOTELS_INSTRUCTION
 from langfuse.langchain import CallbackHandler
- 
+from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 langfuse_handler = CallbackHandler()
 class TravelMCPClient(StateGraph):
     def __init__(self):
         super().__init__(SupervisorState)
-        self.llm = AzureChatOpenAI(
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
-            azure_deployment=os.getenv("AZURE_DEPLOYMENT_ANME"),
-            rate_limiter=rate_limiter
+        # self.llm = AzureChatOpenAI(
+        #     api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+        #     azure_deployment=os.getenv("AZURE_DEPLOYMENT_NAME"),
+        #     rate_limiter=rate_limiter
+        # )
+        model_id = "LiquidAI/LFM2.5-1.2B-Instruct"
+
+        # Using ChatHuggingFace is the only way to invoke few models with correct/expected format of the model
+        # Huggingface Pipeline.from_model_id() does not work, since behind the scene, it doesn't call
+        # apply_chat_template() on the messages
+        llm = HuggingFacePipeline.from_model_id(
+            model_id=model_id,
+            task="text-generation",
+            pipeline_kwargs=dict(max_new_tokens=1000, do_sample=False, return_full_text=False),
         )
+
+        self.llm = ChatHuggingFace(llm=llm)
+        # self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.exit_stack = AsyncExitStack()
+        self.tools_collection = ToolClassification()
 
     async def connect_to_stdio_server(self, cmd: str, args: list, env: dict):
         # Local stack for error isolation
@@ -246,35 +262,56 @@ class TravelMCPClient(StateGraph):
         tools.extend(
             await self.connect_to_server("http://localhost:5400/mcp")
         )
-        struct = {}
-        for field, field_info in ToolClassification.model_fields.items():
-            if field_info.default_factory is not None:
-                dfault = f"Consider {eval(field_info.default_factory.__name__)()} if not provided"
-            else:
-                dfault = f"Consider {'null' if field_info.default is None else field_info.default} if not provided"
-            struct[field] = f"{field_info.description}. " + dfault
-        struct = json.dumps(struct)
-        prompt = PromptTemplate.from_template(TOOL_CLASSIFICATION_INSTRUCTION + JSON_RETURN_INSTRUCTION)
 
-        chain =  prompt | self.llm |JsonOutputParser()
-        response = chain.invoke({
-            'tool_classes': '\n- '.join(ToolClassification.model_fields),
-            'structure': struct,
-            'tools':  '\n'.join([f"- {t.name}: {t.description.partition("Args:\n")[0]}" for t in tools])
-        }, 
-        config={'callbacks':  [langfuse_handler], 'metadata': {'langfuse_tags': ['tool_classification']}})
-        response = ToolClassification.model_validate(response)
-        self.tools_collection = defaultdict(list)
-        for category, toolnames in response:
-            for toolname in toolnames:
-                for t in tools:
-                    if t.name == toolname:
-                        self.tools_collection[category].append(t)
-                        break
+        await self._classify_tools(tools)
+        self.general_toolkit = tools
 
     async def cleanup(self):
         await self.exit_stack.aclose()
 
+    async def _classify_tools(self, tools: list):
+        from torch import cuda, bfloat16, no_grad
+        model_id = "LiquidAI/LFM2.5-1.2B-Instruct"
+
+        device = "cuda" if cuda.is_available() else "cpu"
+
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=bfloat16
+        ).to(device)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        categories = ToolClassification.model_fields.keys()
+
+        def classify_tool(tool_name, description):
+
+            prompt = f"""
+            Tool: {tool_name}
+            Description: {description}
+
+            Category:"""
+
+            inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+            with no_grad():
+                outputs = model(**inputs)
+
+            logits = outputs.logits[0, -1]
+
+            scores = {}
+            for cat in categories:
+                token_id = tokenizer.encode(cat, add_special_tokens=False)[0]
+                scores[cat] = logits[token_id].item()
+
+            return max(scores, key=scores.get)        # Save in tools classified so far in previous batches
+
+        classified_tools = defaultdict(list)
+        for tool in tools:
+            category = classify_tool(tool.name, tool.description)
+            classified_tools[category].append(tool)
+
+        self.tools_collection = ToolClassification.model_validate(classified_tools)
 
 async def main():
     try:
