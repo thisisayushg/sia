@@ -3,6 +3,7 @@ from typing import Optional
 from enum import Enum
 from pathlib import Path
 from yaml import safe_load
+import os
 
 
 class LocalModelHostingService(str, Enum):
@@ -50,14 +51,23 @@ class Config(BaseModel):
         # Provider and service must be used together
         if bool(self.provider) != bool(self.service):
             raise ValueError("provider and service must be used together")
+        
+        if self.service == ServiceType.MODEL_INFERENCE:
+            assert os.getenv('AZURE_INFERENCE_ENDPOINT') is not None
+            assert os.getenv('AZURE_INFERENCE_CREDENTIAL') is not None
+            assert os.getenv('AZURE_DEPLOYMENT_NAME') is not None
             
+        elif self.service == ServiceType.OPENAI:
+            assert os.getenv('AZURE_OPENAI_API_VERSION') is not None
+            assert os.getenv('AZURE_DEPLOYMENT_NAME') is not None
+
         return self
 
     @classmethod
-    def model_validate_yaml(cls):
+    def load_config(cls):
         with open(r'shared/config.yaml') as file:
             content = safe_load(file)
         return cls.model_validate(content)  # Pydantic v2 handles YAML via JSON
 
 # Usage example:
-config = Config.model_validate_yaml()
+config = Config.load_config()

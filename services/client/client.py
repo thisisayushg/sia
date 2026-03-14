@@ -14,21 +14,18 @@ from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp import ClientSession
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_core.messages import HumanMessage
-from langchain_openai import AzureChatOpenAI
 import os
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 from shared.prompt_registry.general import (
     INFER_USER_INTENT,
     GENERAL_SYSTEM_PROMPT,
-    JSON_RETURN_INSTRUCTION,
-    TOOL_CLASSIFICATION_INSTRUCTION,
 )
 
 load_dotenv()
 from langchain_core.globals import set_debug
 
-set_debug(True)
+# set_debug(True)
 from shared.utils.helpers import messages_to_dicts
 from langgraph.checkpoint.memory import InMemorySaver
 from datetime import datetime
@@ -54,30 +51,66 @@ from .subgraphs.destination_recommendation import RecommendationSubgraph
 from .subgraphs.stay_search import StaySesarchSubgraph
 from shared.prompt_registry.stay_search import SEARCH_HOTELS_INSTRUCTION
 from langfuse.langchain import CallbackHandler
-from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from pathlib import Path
+from shared.config import Config
 
 langfuse_handler = CallbackHandler()
 class TravelMCPClient(StateGraph):
     def __init__(self):
         super().__init__(SupervisorState)
-        # self.llm = AzureChatOpenAI(
-        #     api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
-        #     azure_deployment=os.getenv("AZURE_DEPLOYMENT_NAME"),
-        #     rate_limiter=rate_limiter
-        # )
-        model_id = "LiquidAI/LFM2.5-1.2B-Instruct"
 
+        config = Config.load_config()
+        if config.provider == 'azure' and config.service == 'openai':
+            from langchain_openai import AzureChatOpenAI
+
+            self.llm = AzureChatOpenAI(
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+                azure_deployment=os.getenv("AZURE_DEPLOYMENT_NAME"),
+                rate_limiter=rate_limiter
+            )
+        elif config.provider == 'azure' and config.service == 'model_inference':
+            from langchain_azure_ai.chat_models import AzureAIChatCompletionsModel
+
+            self.llm = AzureAIChatCompletionsModel(
+                endpoint=os.environ["AZURE_INFERENCE_ENDPOINT"],
+                credential=os.environ["AZURE_INFERENCE_CREDENTIAL"],
+                model=os.environ['AZURE_DEPLOYMENT_NAME'],
+            )
+        elif not config.provider and config.local_model_hosting_service == 'llamacpp':
+            from langchain_community.chat_models import ChatLlamaCpp
+
+            model_id = "LiquidAI/LFM2.5-1.2B-Instruct"
+            model_path = str(Path.home() / "AppData/Local/llama.cpp/LiquidAI_LFM2.5-1.2B-Instruct-GGUF_LFM2.5-1.2B-Instruct-Q4_K_M.gguf")
+
+            self.llm = ChatLlamaCpp(
+                temperature=0,
+                model_path=model_path,
+                streaming=False,
+                max_tokens=512,
+                rope_freq_scale = 0.0,  # This is important parameter for ChatLlamaCPP; else the Llama models behave different than with Native LlamaCPP 
+                rope_freq_base = 0.0,  # This is important parameter for ChatLlamaCPP; else the Llama models behave different than with Native LlamaCPP 
+                n_batch=512,
+                n_ctx = 5120
+            )
         # Using ChatHuggingFace is the only way to invoke few models with correct/expected format of the model
         # Huggingface Pipeline.from_model_id() does not work, since behind the scene, it doesn't call
         # apply_chat_template() on the messages
-        llm = HuggingFacePipeline.from_model_id(
-            model_id=model_id,
-            task="text-generation",
-            pipeline_kwargs=dict(max_new_tokens=1000, do_sample=False, return_full_text=False),
-        )
+        # self.llm =  ChatHuggingFace.from_model_id(
+        #         model_id = model_id,
+        #         task="text-generation",
+        #         pipeline_kwargs={
+        #             "max_new_tokens": 1000, 
+        #             'temperature':0.2, 
+        #             'top_p':0.1, 
+        #             'do_sample':True, 
+        #             'return_full_text': False,
+        #             'top_p': 0.1,
+        #             'repetition_penalty': 1.05
+        #         }
+        # )
 
-        self.llm = ChatHuggingFace(llm=llm)
+        # self.llm = ChatHuggingFace(llm=llm)
         # self.tokenizer = AutoTokenizer.from_pretrained(model_id)
         self.exit_stack = AsyncExitStack()
         self.tools_collection = ToolClassification()
