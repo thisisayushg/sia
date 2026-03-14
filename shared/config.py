@@ -60,7 +60,13 @@ class Config(BaseModel):
         elif self.service == ServiceType.OPENAI:
             assert os.getenv('AZURE_OPENAI_API_VERSION') is not None
             assert os.getenv('AZURE_DEPLOYMENT_NAME') is not None
+            assert os.getenv('AZURE_OPENAI_ENDPOINT') is not None
+            assert os.getenv('AZURE_OPENAI_API_KEY') is not None
 
+        if config.enable_llm_tracing:
+            assert os.getenv('LANGFUSE_SECRET_KEY') is not None
+            assert os.getenv('LANGFUSE_PUBLIC_KEY') is not None
+            assert os.getenv('LANGFUSE_BASE_URL') is not None
         return self
 
     @classmethod
