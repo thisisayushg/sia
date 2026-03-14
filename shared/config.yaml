@@ -1,0 +1,9 @@
+local_model_path: ''
+local_model_hosting_service: llamacpp
+model_id: ''
+
+# providers
+provider: azure
+service: model_inference
+
+enable_llm_tracing: true
