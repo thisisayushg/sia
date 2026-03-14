@@ -50,12 +50,18 @@ from .schema.graph_states import ElicitationState, SupervisorState
 from .subgraphs.destination_recommendation import RecommendationSubgraph
 from .subgraphs.stay_search import StaySesarchSubgraph
 from shared.prompt_registry.stay_search import SEARCH_HOTELS_INSTRUCTION
-from langfuse.langchain import CallbackHandler
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 from shared.config import Config
+config = Config.load_config()
 
-langfuse_handler = CallbackHandler()
+if config.enable_llm_tracing:
+    from langfuse.langchain import CallbackHandler
+    langfuse_handler = CallbackHandler()
+else:
+    from langchain_core.callbacks import BaseCallbackHandler
+    langfuse_handler = BaseCallbackHandler()
+
 class TravelMCPClient(StateGraph):
     def __init__(self):
         super().__init__(SupervisorState)
@@ -81,7 +87,7 @@ class TravelMCPClient(StateGraph):
             from langchain_community.chat_models import ChatLlamaCpp
 
             model_id = "LiquidAI/LFM2.5-1.2B-Instruct"
-            model_path = str(Path.home() / "AppData/Local/llama.cpp/LiquidAI_LFM2.5-1.2B-Instruct-GGUF_LFM2.5-1.2B-Instruct-Q4_K_M.gguf")
+            model_path = config.local_model_path
 
             self.llm = ChatLlamaCpp(
                 temperature=0,
