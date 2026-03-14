@@ -12,7 +12,9 @@ DO NOT Assume any information that user hasnt provided explicitly.
 ### Date interpretation using season
 - If a season is specified, check the start and end date of the season as per commonly occuring timeframe
 - Once you find the start and end date of the season check if the current date falls within the season. If so,  Assume user will be planning for trip in near future. then consider the start date from the CURRENT DATE.
-- ONLY if the end date of the season has already passed for this year, consider start and end dates of upcoming season
+- ONLY if the end date of the season has already passed for this year, consider the season as upcoming season
+- If upcoming season, then consider start date of the trip to be the start of the upcoming season. 
+- Find the end date(if not specified exxplicitly) by adding duration of trip to start date.
 
 ### Location Interpretation and Disambiguation  
 - When the user provides a location, interpret it as either a city, town, neighborhood, or a popular tourist spot/landmark. 
