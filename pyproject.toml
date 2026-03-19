@@ -3,7 +3,7 @@ name = "mp-client-python"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "anthropic>=0.73.0",
     "bs4>=0.0.2",
@@ -13,13 +13,19 @@ dependencies = [
     "fastmcp>=2.13.1",
     "geograpy3>=0.3.0",
     "langchain>=1.0.7",
+    "langchain-community>=0.4.1",
+    "langchain-huggingface>=1.2.1",
     "langchain-mcp-adapters>=0.1.13",
     "langchain-ollama>=1.0.0",
     "langchain-openai>=1.0.3",
     "langfuse>=3.14.5",
     "langgraph>=1.0.3",
+    "llama-cpp-python>=0.3.16",
     "mcp[cli]>=1.21.1",
     "nltk>=3.9.3",
+    "openvino>=2026.0.0",
+    "openvino-genai>=2026.0.0.0",
+    "optimum[intel]>=2.1.0",
     "py-countries-states-cities-database>=2.2.13",
     "python-dotenv>=1.2.1",
     "rapidfuzz>=3.14.3",
@@ -27,6 +33,6 @@ dependencies = [
     "setuptools>=82.0.0",
     "streamlit>=1.51.0",
     "torch>=2.10.0",
-    "transformers>=5.2.0",
+    "transformers>=4.45,<4.58",
     "tzdata>=2025.2",
 ]
