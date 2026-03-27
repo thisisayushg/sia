@@ -39,14 +39,14 @@ class Config(BaseModel):
             raise ValueError("local_model_path requires local_model_hosting_service")
             
         # model_id and local_model_path are mutually exclusive
-        if local_path and model_id:
+        if local_path and model_id and self.local_model_hosting_service != LocalModelHostingService.OPENVINO:
             raise ValueError("local_model_path and model_id should not be provided together")
             
         # Provider config incompatible with model config
         if (self.provider or self.service) and (local_path or model_id):
             raise ValueError("provider/service incompatible with model_id/local_model_path")
         
-        if model_id and self.local_model_hosting_service != LocalModelHostingService.HUGGINGFACE:
+        if model_id and self.local_model_hosting_service == LocalModelHostingService.LLAMACPP:
             raise ValueError("model_id is only required with Huggingface models")
         
         # Provider and service must be used together
