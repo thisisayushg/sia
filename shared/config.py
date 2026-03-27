@@ -9,6 +9,7 @@ import os
 class LocalModelHostingService(str, Enum):
     LLAMACPP = "llamacpp"
     HUGGINGFACE = "hf"
+    OPENVINO = "openvino"
 
 class ServiceType(str, Enum):
     MODEL_INFERENCE = "model_inference"

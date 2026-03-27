@@ -99,9 +99,16 @@ class TravelMCPClient(StateGraph):
                 n_batch=512,
                 n_ctx = 5120
             )
+        elif not config.provider and config.local_model_hosting_service == "openvino":
+            from openvino import Core
+            # Try loading in NPU. Only a handful models are actually supported to be loaded in NPU. 
+            # Check https://huggingface.co/blog/Neural-Hacker/openvino
+            from .utils.openvino_chat import OpenVINOGenAIChat
+            self.llm = OpenVINOGenAIChat(model_path=config.local_model_path)
         # Using ChatHuggingFace is the only way to invoke few models with correct/expected format of the model
         # Huggingface Pipeline.from_model_id() does not work, since behind the scene, it doesn't call
         # apply_chat_template() on the messages
+        # from langchain_huggingface import ChatHuggingFace
         # self.llm =  ChatHuggingFace.from_model_id(
         #         model_id = model_id,
         #         task="text-generation",
