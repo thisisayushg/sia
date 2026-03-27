@@ -1,168 +1,170 @@
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from transformers import AutoTokenizer
-from optimum.intel.openvino import OVModelForCausalLM
+import openvino_genai as ov_genai
 
-class OpenVINOChatModel(BaseChatModel):
-    model_id: str = ''
+class OpenVINOGenAIChat(BaseChatModel):
+    """LangChain wrapper for OpenVINO GenAI with native tool calling."""
+    llm: Any = None
+    model_path: str = ''
     device: str = 'GPU'
-    tokenizer: AutoTokenizer = None
-    model: OVModelForCausalLM = None
+    tokenizer: Any = None
+    tool_prompt: str = ''
 
-    def __init__(self, model_id: str, device: str = "GPU", **kwargs):
+    def __init__(self, model_path: str, device: str = "GPU", **kwargs):
         super().__init__(**kwargs)
-        self.model_id = model_id
+        self.llm = ov_genai.LLMPipeline(model_path, device)
+        self.tokenizer = self.llm.get_tokenizer()
+        self.model_path = model_path
         self.device = device
-        self.model = OVModelForCausalLM.from_pretrained(model_id, device=device)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
 
     @property
     def _llm_type(self) -> str:
-        return "openvino_chat"
+        return "openvino_genai"
 
-    def _convert_messages(self, messages: List[BaseMessage], tools: List[Dict] = None) -> List[Dict[str, Any]]:
-        """Convert to chat dicts with tool support."""
-        chat_dicts = []
+    def _convert_messages(self, messages: List[BaseMessage]) -> List[Dict[str, str]]:
+        """Convert LangChain messages to GenAI chat format."""
+        chat = []
+        if hasattr(messages, 'messages'):
+            messages = messages.messages
         for msg in messages:
             role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
             
-            msg_dict = {"role": role, "content": msg.content}
-            
-            # Handle ToolMessage
             if isinstance(msg, ToolMessage):
-                msg_dict["role"] = "tool"
-                msg_dict["content"] = msg.content
-                msg_dict["tool_call_id"] = msg.tool_call_id
-            
-            # Handle AIMessage with tool_calls
-            elif isinstance(msg, AIMessage) and msg.tool_calls:
-                msg_dict["tool_calls"] = [
-                    {
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": json.dumps(tc["args"])}
+                role = "function"
+                content = f"{msg.name}: {msg.content}"
+            else:
+                content = msg.content
+                
+            chat.append({"role": role, "content": content})
+        return chat
+    
+
+    def _tool_specs(self, tools):
+        tool_specs = []
+
+        for tool in tools:
+            if hasattr(tool.args_schema, 'model_json_schema'):
+                schema = tool.args_schema.model_json_schema()
+            else:
+                schema = tool.args_schema
+
+            params = {k: v['type'] for k, v in schema['properties'].items()}
+
+            tool_specs.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": params
                     }
-                    for tc in msg.tool_calls
-                ]
-            
-            chat_dicts.append(msg_dict)
-        
-        return chat_dicts
+                }
+            })
+        return tool_specs
+
+
+    def bind_tools(self, tools: List[BaseTool], **kwargs) -> "OpenVINOGenAIChat":
+        self._bound_tools = tools
+
+        tool_specs = self._tool_specs(tools)
+        self.tool_prompt = f"""
+        You use tools via this format:
+        {{tool_name}}
+        {{"param1": "value"}}
+
+        text
+
+        Available tools:
+        {json.dumps(tool_specs, indent=2)}
+        """
+
+        return self
 
     def _generate(
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_manager: Optional[Any] = None,
         **kwargs: Any
     ) -> ChatResult:
-        tools = kwargs.pop("tools", None)
-        tool_choice = kwargs.pop("tool_choice", "auto")
+        chat_history = self._convert_messages(messages)
         
-        if hasattr(messages, 'messages') and all([isinstance(m, BaseMessage) for m in messages.messages]):
-            messages = messages.messages
-        chat_dicts = self._convert_messages(messages, tools)
-        inputs = self.tokenizer.apply_chat_template(
-            chat_dicts,
-            tools=tools,  # Native tool support via chat template
+        config = ov_genai.GenerationConfig(
+            max_new_tokens=kwargs.get("max_new_tokens", 256),
+            temperature=kwargs.get("temperature", 0.7),
+            top_p=kwargs.get("top_p", 0.9),
+            stop=stop or []
+        )
+        prompt = self.tokenizer.apply_chat_template(
+            chat_history,
             add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True
+            tools=self._tool_specs(self._bound_tools) if hasattr(self, '_bound_tools') else []
         )
         
-        max_new_tokens = kwargs.pop("max_new_tokens", 256)
-        generate_kwargs = {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": kwargs.get("do_sample", False),
-            "temperature": kwargs.get("temperature", 0.7),
-            **kwargs
-        }
+        response = self.llm.generate(prompt, config)
         
-        if tools:
-            generate_kwargs["tools"] = tools
-            generate_kwargs["tool_choice"] = tool_choice
-            
-        outputs = self.model.generate(**inputs, **generate_kwargs)
+        # Parse tool calls (GenAI native format)
+        tool_calls = []
+        if hasattr(self, '_bound_tools'):
+            tool_calls = self._parse_genai_tools(response)
+            content = response if not tool_calls else ""
+        else:
+            content = response
         
-        input_len = inputs["input_ids"].shape[-1]
-        generated_tokens = outputs[0][input_len:]
-        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        ai_msg = AIMessage(content=content, tool_calls=tool_calls)
+        return ChatResult(generations=[ChatGeneration(message=ai_msg)])
+
+    def _parse_genai_tools(self, text: str) -> List[Dict]:
+        """Parse OpenVINO GenAI tool call format."""
+        # GenAI returns structured: {"function_call": {"name": "...", "arguments": {...}}}
+        import re
+        import uuid
+        if not text.lstrip().startswith('<tool_call>') and text.rstrip().endswith('</tool_call>'):
+            text = '<tool_call>\n' + text
         
-        # Parse native tool_calls from response (Transformers handles structured output)
-        ai_msg = AIMessage(content=text)
+        tool_calls = []
         
-        # If model supports structured tools, extract from logprobs/output
-        # Fallback to text parsing if needed
-        if tools:
+        # Pattern matches complete <tool_call> blocks
+        pattern = r'<tool_call>\s*\n\s*(\{.*?\})\s*\n\s*</tool_call>'
+        matches = re.findall(pattern, text, re.DOTALL)
+        
+        for match in matches:
             try:
-                # Try native parsing (works for supported models)
-                tool_calls = self.model.parse_tool_calls(outputs, self.tokenizer)
-                ai_msg.tool_calls = tool_calls or []
-            except:
-                # Fallback regex parsing (universal)
-                pass  # Use previous regex logic if needed
+                # Parse the JSON object inside
+                tool_json = json.loads(match.strip())
+                
+                tool_call = {
+                    "name": tool_json.get("name"),
+                    "args": tool_json.get("arguments", {}),
+                    "id": tool_json.get("id") or f"call_{str(uuid.uuid4())[:8]}"
+                }
+                
+                if tool_call["name"]:  # Valid tool call
+                    tool_calls.append(tool_call)
+                    
+            except json.JSONDecodeError:
+                # Skip malformed JSON
+                continue
         
-        generation = ChatGeneration(message=ai_msg)
-        return ChatResult(generations=[generation])
+        return tool_calls
 
-    def bind_tools(self, tools: List[Union[BaseTool, BaseModel, Dict, str]], **kwargs) -> "OpenVINOChatModel":
-        """Convert LangChain tools to Transformers format."""
-        tool_list = []
-        for tool in tools:
-            if isinstance(tool, BaseTool):
-                if hasattr(tool.args_schema, 'model_json_schema'):
-                    schema = tool.args_schema.model_json_schema()
-                schema = tool.args_schema
-                tool_list.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": schema
-                    }
-                })
-            elif isinstance(tool, dict):
-                tool_list.append(tool)
-            elif isinstance(tool, BaseModel):
-                tool_list.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.__name__.lower(),
-                        "description": getattr(tool, "description", ""),
-                        "parameters": tool.model_json_schema()
-                    }
-                })
-        
-        self._bound_tools = tool_list
-        self._tool_kwargs = kwargs
-        return self
-
-    def invoke(self, input: List[BaseMessage], config: Optional[RunnableConfig] = None, **kwargs: Any) -> AIMessage:
-        tools = getattr(self, "_bound_tools", None)
-        if tools:
-            kwargs["tools"] = tools
-            kwargs.update(self._tool_kwargs)
-        result = self.generate([input], stop=kwargs.get("stop"), **kwargs)
+    def invoke(self, input: List[BaseMessage], config: Optional[RunnableConfig] = None, **kwargs) -> AIMessage:
+        result = self._generate(input, **kwargs)
         return result.generations[0].message
 
-    async def ainvoke(self, input: List[BaseMessage], config: Optional[RunnableConfig] = None, **kwargs: Any) -> AIMessage:
+    async def ainvoke(self, input: List[BaseMessage], config: Optional[RunnableConfig] = None, **kwargs) -> AIMessage:
         loop = asyncio.get_event_loop()
-        tools = getattr(self, "_bound_tools", None)
-        if tools:
-            kwargs["tools"] = tools
-            kwargs.update(self._tool_kwargs)
         result = await loop.run_in_executor(None, lambda: self._generate(input, **kwargs))
         return result.generations[0].message
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:
-        return {"model_id": self.model_id, "device": self.device}
+        return {"model_path": self.model_path, "device": self.device}
