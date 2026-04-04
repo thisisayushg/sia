@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langchain_core.prompt_values import StringPromptValue
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import RunnableConfig
 from transformers import AutoTokenizer
@@ -32,6 +33,11 @@ class OpenVINOGenAIChat(BaseChatModel):
     def _convert_messages(self, messages: List[BaseMessage]) -> List[Dict[str, str]]:
         """Convert LangChain messages to GenAI chat format."""
         chat = []
+
+        if isinstance(messages, StringPromptValue):
+            chat.append({'role': 'user', 'content': messages.text})
+            return chat
+        
         if hasattr(messages, 'messages'):
             messages = messages.messages
         for msg in messages:
