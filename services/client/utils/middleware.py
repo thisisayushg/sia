@@ -47,6 +47,8 @@ async def handle_tool_errors(request, handler):
     except asyncio.CancelledError as e:
         return "Tool execution timed out or was cancelled"
     except (ValidationError, ToolException) as e:
+        if "EAI_AGAIN" in e:
+            return await handler(request)
         if "unexpected keyword argument" in str(e).lower():
             toolmsg = ToolMessage(
                     content=
