@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import RunnableConfig
 from transformers import AutoTokenizer
+from pydantic import PydanticInvalidForJsonSchema
 import openvino_genai as ov_genai
 
 class OpenVINOGenAIChat(BaseChatModel):
@@ -44,32 +45,53 @@ class OpenVINOGenAIChat(BaseChatModel):
                 
             chat.append({"role": role, "content": content})
         return chat
-    
-
+        
     def _tool_specs(self, tools):
         tool_specs = []
 
         for tool in tools:
-            if hasattr(tool.args_schema, 'model_json_schema'):
-                schema = tool.args_schema.model_json_schema()
-            else:
-                schema = tool.args_schema
+            # --- Get schema ---
 
-            params = {k: v['type'] for k, v in schema['properties'].items()}
+            try:
+                if hasattr(tool, 'model_json_schema'):
+                    # This is likely a structured output schema
+                    schema = tool.model_json_schema()
+                    name = getattr(tool, "__name__", "structured_output")
+                    description = getattr(tool, "__doc__", "")
+                elif hasattr(tool, 'args_schema') and hasattr(tool.args_schema, 'model_json_schema'):
+                    schema = tool.args_schema.model_json_schema()
+                    name = getattr(tool, "name", tool.args_schema.__name__)
+                    description = getattr(tool, "description", tool.args_schema.__doc__ or "")
+                
+                elif hasattr(tool, 'args_schema'):
+                    schema = tool.args_schema
+                    name = getattr(tool, "name", "unknown_tool")
+                    description = getattr(tool, "description", "")
+            except PydanticInvalidForJsonSchema:
+                if hasattr(tool, 'args_schema'):
+                    schema = tool.args_schema
+                    name = getattr(tool, "name", "unknown_tool")
+                    description = getattr(tool, "description", "")
+                else:
+                    raise AttributeError(f"Cannot get schema for tool: {tool}")
+
+            # --- IMPORTANT: Use full schema, don't flatten ---
+            parameters = {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", [])
+            }
 
             tool_specs.append({
                 "type": "function",
                 "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": params
-                    }
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters
                 }
             })
-        return tool_specs
 
+        return tool_specs
 
     def bind_tools(self, tools: List[BaseTool], **kwargs) -> "OpenVINOGenAIChat":
         self._bound_tools = tools
