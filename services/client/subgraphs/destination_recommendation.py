@@ -1,18 +1,18 @@
-from langgraph.graph import StateGraph, START, END, MessagesState
+from langchain.messages import HumanMessage
+from langgraph.graph import StateGraph, START, END
 from typing import Dict, List
 from langchain.agents import create_agent
-from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langgraph.types import Command, Send
 from ..schema.booking_details import TravelSearchResultCollection, TravelSearchResult
 from ..schema.scraping_result import ScrapingResultCollection
-from ..schema.name_extraction import NameExtractionResult, NameExtractionResultCollection
-from shared.prompt_registry.destination_recommendation import DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, NAME_EXTRACTION_INSTRUCTION
-from shared.prompt_registry.general import JSON_RETURN_INSTRUCTION, TRANSPERANCY_INSTRUCTION
+from shared.prompt_registry.destination_recommendation import DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, USER_REQUIREMENTS_HEADER
+from shared.prompt_registry.general import JSON_RETURN_INSTRUCTION, REFORMATTING_INSTRUCTION
 from ..utils.middleware import handle_tool_errors
 from ..schema.graph_states import RecommendationState
 from langchain_core.exceptions import OutputParserException
-from langchain_core.language_models import LanguageModelLike, BaseLanguageModel
+from langchain_core.language_models import BaseChatModel
 from shared.utils.helpers import describe_model, merge_ner_locations, filter_similar_phrases
 from transformers import AutoTokenizer, AutoModelForTokenClassification
 from transformers import pipeline
@@ -26,16 +26,18 @@ from langfuse.langchain import CallbackHandler
 langfuse_handler = CallbackHandler()
 
 class RecommendationSubgraph(StateGraph):
-    def __init__(self, llm: BaseLanguageModel, toolkit):
+    def __init__(self, llm: BaseChatModel, toolkit):
         self.llm = llm
         self.toolkit = toolkit
         super().__init__(RecommendationState)
         self.country_state_map = {c.name.lower(): [s.name.lower() for s in State.get_states_of_country(c.iso2)] for c in Country.get_countries()}
 
     async def _perform_web_search(self, state: RecommendationState):
-        last_message = state['messages'][-1]
-        requirements_gathered = state['requirements_gathered']
-        system_prompt = PromptTemplate.from_template(WEB_SEARCH_INSTRUCTION + JSON_RETURN_INSTRUCTION + TRANSPERANCY_INSTRUCTION)
+        # Transform the parsed requirements (by AI) to Human Input
+        requirements_gathered = "\n".join([f"{key}: {value}" for key, value in state['requirements_gathered'].items()])
+        requirements_gathered = HumanMessage(USER_REQUIREMENTS_HEADER.format(user_preferences=requirements_gathered))
+        
+        system_prompt = PromptTemplate.from_template(WEB_SEARCH_INSTRUCTION)
         fields = [
             f"""
             {field}:  {field_info.description}. Consider {'null' if field_info.default is None else field_info.default} if not provided,
@@ -51,20 +53,33 @@ class RecommendationSubgraph(StateGraph):
                 ]
             }}
         """
-        system_prompt = system_prompt.format(source_count = 5, user_preferences = requirements_gathered, structure=struct)
+        system_prompt = system_prompt.format(source_count = 5)
+
+        # Important to set return_direct to true as the small language model
+        # Hallucinate and remake information returned from the tool
+        # Hence this flag bypasses the model and directly returns tool output
+        for t in self.toolkit:
+            t.return_direct=True
         
         # CAnt use response format since multiple tool calls throw error
         # even if same tool is called twice in parallel. Model needs to be given explicit instruction to 
         # concatenate multiple tool call results but prompting is unreliable
-        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors]) 
-        response = await agent.ainvoke({'messages':[last_message]},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['web_search']}})
+        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt,  middleware=[handle_tool_errors])
+        response = await agent.ainvoke({'messages':[requirements_gathered]}, config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['web_search']}})
+        ai_response = response['messages'][-1]
+
+        # Covnert response to a structured response
+        prompt = PromptTemplate.from_template(REFORMATTING_INSTRUCTION)
+        chain = prompt | self.llm | JsonOutputParser()
 
         try:
-            ai_response = response['messages'][-1]
-            response = JsonOutputParser().parse(ai_response.content)
+            response = chain.invoke({
+                'info': ai_response.content,
+                'structure': struct
+            })
         except OutputParserException as e:
             response = demjson.decode(ai_response.content)
-        except Exception:
+        except Exception as e:
             print(e)
         results: TravelSearchResultCollection = TravelSearchResultCollection.model_validate(response)
         return {'web_search_results': results.search_results[:5]}
