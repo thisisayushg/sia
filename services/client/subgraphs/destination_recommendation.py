@@ -10,6 +10,7 @@ from ..schema.scraping_result import ScrapingResultCollection
 from shared.prompt_registry.destination_recommendation import DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, USER_REQUIREMENTS_HEADER
 from shared.prompt_registry.general import JSON_RETURN_INSTRUCTION, REFORMATTING_INSTRUCTION
 from ..utils.middleware import handle_tool_errors
+from ..utils.openvino_chat import OpenVINOGenAIChat
 from ..schema.graph_states import RecommendationState
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
@@ -171,13 +172,29 @@ class RecommendationSubgraph(StateGraph):
             _.append(Send('extract_places', {**state, 'scraping_result': result.model_dump()}))
         return _
     
-    async def _investigate_place(self, state: RecommendationState):
+    async def _investigate_place(self, state: RecommendationState, config):
         last_message = state['messages'][-1]
+        state_clone = state.copy()
+        state_clone['messages'] = [last_message]
+        from shared.config import Config
+
+        config = Config.load_config()
+
+        llm = OpenVINOGenAIChat(model_path=config.local_model_path)
+        # from uuid import uuid4
+        # branch_id = str(uuid4())
+        # branch_config = {
+        #     "configurable": {
+        #         **config['configurable'],
+        #         "thread_id": branch_id
+        #     },
+        #     "callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['investigate_place']}
+        # }
+
         travel_info = {'destination': state['recommendation'], **state['requirements_gathered']}
         system_prompt = PromptTemplate.from_template(DESTINATION_PROFILE_INSTRUCTION).format(travel_info=travel_info)
-        agent = create_agent(model=self.llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors])
-
-        response = await agent.ainvoke({'messages': last_message},    config={"callbacks": [langfuse_handler], 'metadata': {'langfuse_tags': ['investigate_place']}})
+        agent = create_agent(model=llm, tools=self.toolkit, system_prompt=system_prompt, middleware=[handle_tool_errors])
+        response = await agent.ainvoke(state_clone, context={'current_node': 'investigate_place'})
         try:
             ai_response = response['messages'][-1]
         except Exception as e:
