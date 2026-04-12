@@ -24,16 +24,24 @@ Current timestamp is {now}
 
 
 JSON_RETURN_INSTRUCTION="""
-Return ONLY a JSON output parsible as a JSON. 
-Return valid JSON only.
-Do not include trailing commas.
-Do not include markdown.
+## Response Structure
+1. Return ONLY a JSON output parsible as a JSON. 
+2. Return valid JSON only.
+3. Do not include trailing commas.
+4. Do not include markdown.
 It should have the following structure with exact key names:
 
 {structure}
 
 DO NOT include any reasoning with any key except the key called reasoning, unless explicity specified for any other key.
 """
+
+REFORMATTING_INSTRUCTION="""
+Given information below, your task is to reformat the information as per the response structure provided.
+STRICTLY DO NOT MAKE UP ANY INFORMATION. ONLY REFORMATTING/RESTRUCTURING IS NEEDED.
+## Information
+{info}
+""" + JSON_RETURN_INSTRUCTION
 
 
 TOOL_CLASSIFICATION_INSTRUCTION="""
