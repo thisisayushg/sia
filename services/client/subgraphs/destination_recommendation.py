@@ -108,8 +108,10 @@ class RecommendationSubgraph(StateGraph):
                 timeout=225  # seconds
             )
         except (ArticleException, ArticleBinaryDataException) as e:
-           return {'extracted_names': []}
+           return Command(update={"extracted_names": []}, goto=END)
 
+        if not places.cities:
+           return Command(update={"extracted_names": []}, goto=END)
         cities = []
         for city in places.cities:
             if (
