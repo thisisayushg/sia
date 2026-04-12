@@ -4,7 +4,7 @@ from typing import Dict, List, TypedDict
 from langchain.agents import create_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from langgraph.types import Command, Send
+from langgraph.types import Command, Send, Overwrite
 from ..schema.booking_details import TravelSearchResultCollection, TravelSearchResult
 from ..schema.scraping_result import ScrapingResultCollection
 from shared.prompt_registry.destination_recommendation import DESTINATION_PROFILE_INSTRUCTION, WEB_SEARCH_INSTRUCTION, SCRAPE_PAGE_INSTRUCTION, USER_REQUIREMENTS_HEADER
@@ -238,7 +238,10 @@ class RecommendationSubgraph(StateGraph):
             content = regions_file.read_text()
         
         final_list = [item for item in final_list if item.lower() not in content.lower()]
-        return {'extracted_names': sorted(final_list)[:5]}
+        # Resetting extracted names is required since the annotation in state schema 
+        # contains operator.add, which concatenates the returned items here
+        # into existing list
+        return {'extracted_names': Overwrite(value=sorted(final_list)[:5])}
 
     def _broadcast_extraction_result(self, state: RecommendationState):
         _ = []
