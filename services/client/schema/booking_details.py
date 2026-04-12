@@ -34,15 +34,15 @@ class TravelDestination(BaseModel):
 class TravelDestinationRecommendations(BaseModel):
     destinations: List[TravelDestination]
 
-from enum import Enum
+from enum import StrEnum
 
-class TravelPurpose(Enum):
-    RELAXATION = 1
-    FAMILY_TIME = 2
-    ADVENTURE = 3
+class TravelPurpose(StrEnum):
+    RELAXATION = 'RELAXATION'
+    FAMILY_TIME = 'FAMILY_TIME'
+    ADVENTURE = 'ADVENTURE'
 
 class TravelSearchResult(WebSearchResult):
-    purpose: TravelPurpose = Field(description="The purpose of travel as given by the user")
+    purpose: Optional[TravelPurpose] = Field('', description="The purpose of travel as given by the user")
 
 class TravelSearchResultCollection(WebSearchResultCollection):
     pass
