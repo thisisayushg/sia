@@ -121,11 +121,10 @@ class RecommendationSubgraph(StateGraph):
             ):
                 cities.append(city)
 
-        return {"extracted_names": cities[:2]}
+        return Command(update={"extracted_names": cities}, goto="filter_duplicate_names")
 
     async def _parse_webpage(self, state: RecommendationState):
         last_message = state['messages'][-1]
-        web_search_result: TravelSearchResult = state['web_search_result']
         struct = describe_model(ScrapingResultCollection)
         system_prompt = PromptTemplate.from_template(SCRAPE_PAGE_INSTRUCTION + JSON_RETURN_INSTRUCTION).format(scraping_sources=web_search_result.url, structure=struct)
 
@@ -224,6 +223,5 @@ class RecommendationSubgraph(StateGraph):
         graph.add_edge(START, "perform_websearch")
         graph.add_conditional_edges("perform_websearch", self._broadcast_search_results, ["extract_places"])
         graph.add_conditional_edges("parse_webpage", self._broadcast_scraping_results, ['extract_places'])
-        graph.add_edge("extract_places", "filter_duplicate_names")
         graph.add_conditional_edges("filter_duplicate_names", self._broadcast_extraction_result, ['investigate_place'])
         graph.add_edge("investigate_place", END)
